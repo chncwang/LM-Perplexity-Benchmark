@@ -116,62 +116,21 @@ def tokenize_wikitext_datasets(
     return tokenized_train, tokenized_val, tokenized_test
 
 
-class TextDataset(Dataset):
-    """
-    Dataset class for character-level text data.
-    """
-
-    def __init__(self, data: np.ndarray, sequence_length: int) -> None:
-        """
-        Initialize the dataset.
-
-        @param data: The data.
-        @param sequence_length: The sequence length.
-        """
-        self.data = torch.from_numpy(data).long()
-        self.sequence_length = sequence_length
-
-    def __len__(self) -> int:
-        """
-        Get the length of the dataset.
-
-        @return: The length of the dataset.
-        """
-        return len(self.data) - self.sequence_length - 1
-
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Get an item from the dataset.
-
-        @param idx: The index.
-        @return: A tuple of tensors.
-        """
-        x = self.data[idx : idx + self.sequence_length]
-        y = self.data[idx + 1 : idx + self.sequence_length + 1]
-        return x, y
-
-
 def create_dataloaders(
-    train_data: np.ndarray,
-    val_data: np.ndarray,
-    test_data: np.ndarray,
-    sequence_length: int,
+    train_dataset: Dataset,
+    val_dataset: Dataset,
+    test_dataset: Dataset,
     batch_size: int,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
     """
-    Create DataLoader objects for training, validation, and testing.
+    Create DataLoader objects for training, validation, and testing using Hugging Face Datasets.
 
-    @param train_data: The training data.
-    @param val_data: The validation data.
-    @param test_data: The test data.
-    @param sequence_length: The sequence length.
+    @param train_dataset: The training dataset.
+    @param val_dataset: The validation dataset.
+    @param test_dataset: The test dataset.
     @param batch_size: The batch size.
     @return: The train, validation, and test DataLoader objects.
     """
-    train_dataset = TextDataset(train_data, sequence_length)
-    val_dataset = TextDataset(val_data, sequence_length)
-    test_dataset = TextDataset(test_data, sequence_length)
-
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)

@@ -187,7 +187,6 @@ def main():
         train_dataset,
         val_dataset,
         test_dataset,
-        config["sequence_length"],
         config["batch_size"],
     )
 
