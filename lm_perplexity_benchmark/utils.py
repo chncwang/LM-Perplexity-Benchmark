@@ -5,8 +5,9 @@ import os
 import numpy as np
 import requests
 import torch
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from torch.utils.data import DataLoader, Dataset
+from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -43,49 +44,76 @@ def setup_logger(name: str, log_file: str, level: int = logging.INFO) -> logging
     return logger
 
 
-def download_enwik8(data_dir: str = "data") -> str:
+def download_wikitext103() -> tuple[Dataset, Dataset, Dataset]:
     """
-    Download and prepare enwik8 dataset using Hugging Face datasets.
+    Download and prepare wikitext-103 dataset using Hugging Face datasets.
 
-    @param data_dir: The directory to use for caching the dataset.
-    @return: The path to the dataset cache.
+    @return: A tuple of (train, validation, test) datasets.
     """
-    # Set the cache directory for Hugging Face datasets
-    os.environ["HF_DATASETS_CACHE"] = data_dir
-
     logger.info(
-        "download_enwik8: Loading enwik8 dataset using Hugging Face datasets..."
+        "download_wikitext103: Loading wikitext-103 dataset using Hugging Face datasets..."
     )
-    dataset = load_dataset("enwik8", split="train")
+    # Load all splits
+    train_dataset = load_dataset("wikitext", "wikitext-103-v1", split="train")
+    val_dataset = load_dataset("wikitext", "wikitext-103-v1", split="validation")
+    test_dataset = load_dataset("wikitext", "wikitext-103-v1", split="test")
 
-    # Get the path to the cached dataset
-    cache_path = dataset.cache_files[0]["filename"]
+    logger.info("download_wikitext103: Datasets loaded successfully")
 
-    logger.info(f"download_enwik8: Dataset loaded and cached at: {cache_path}")
-
-    return cache_path
+    return train_dataset, val_dataset, test_dataset
 
 
-def load_and_preprocess_data(
-    filepath: str, sequence_length: int = 256
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def tokenize_wikitext_datasets(
+    train_dataset: Dataset,
+    val_dataset: Dataset,
+    test_dataset: Dataset,
+    model_name: str,
+    max_length: int = 512,
+) -> tuple[Dataset, Dataset, Dataset]:
     """
-    Load and preprocess enwik8 data.
+    Tokenize the Wikitext datasets using a tokenizer from Hugging Face.
 
-    @param filepath: The path to the dataset.
-    @param sequence_length: The sequence length.
-    @return: The train, validation, and test data.
+    @param train_dataset: The training dataset
+    @param val_dataset: The validation dataset
+    @param test_dataset: The test dataset
+    @param model_name: The model name for selecting the tokenizer
+    @param max_length: The maximum length for token sequences (default is 512)
+    @return: Tuple of tokenized (train, validation, test) datasets
     """
-    with open(filepath, "rb") as f:
-        data = np.frombuffer(f.read(), dtype=np.uint8)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    # Split into train, validation, and test sets (90%, 5%, 5%)
-    n = len(data)
-    train_data = data[: int(0.9 * n)]
-    val_data = data[int(0.9 * n) : int(0.95 * n)]
-    test_data = data[int(0.95 * n) :]
+    # Add padding token if it doesn't exist
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
-    return train_data, val_data, test_data
+    def tokenize_function(examples):
+        return tokenizer(
+            examples["text"],
+            truncation=True,
+            padding="max_length",
+            max_length=max_length,
+        )
+
+    cache_dir = "./cache"
+    os.makedirs(cache_dir, exist_ok=True)
+
+    tokenized_train = train_dataset.map(
+        tokenize_function,
+        batched=True,
+        cache_file_name=os.path.join(cache_dir, "tokenized_train.arrow"),
+    )
+    tokenized_val = val_dataset.map(
+        tokenize_function,
+        batched=True,
+        cache_file_name=os.path.join(cache_dir, "tokenized_val.arrow"),
+    )
+    tokenized_test = test_dataset.map(
+        tokenize_function,
+        batched=True,
+        cache_file_name=os.path.join(cache_dir, "tokenized_test.arrow"),
+    )
+
+    return tokenized_train, tokenized_val, tokenized_test
 
 
 class TextDataset(Dataset):

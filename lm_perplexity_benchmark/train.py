@@ -9,14 +9,15 @@ import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from transformers import AutoTokenizer
 
 from lm_perplexity_benchmark.model import LSTMModel
 from lm_perplexity_benchmark.utils import (
     compute_bpc,
     create_dataloaders,
-    download_enwik8,
-    load_and_preprocess_data,
+    download_wikitext103,
     setup_logger,
+    tokenize_wikitext_datasets,
 )
 
 
@@ -150,15 +151,44 @@ def main():
     logger.info(f"Using device: {device}")
 
     # Load and preprocess data
-    filepath = download_enwik8(config["data_dir"])
-    exit()
-    train_data, val_data, test_data = load_and_preprocess_data(
-        filepath, config["sequence_length"]
+    train_dataset, val_dataset, test_dataset = download_wikitext103()
+    train_dataset, val_dataset, test_dataset = tokenize_wikitext_datasets(
+        train_dataset, val_dataset, test_dataset, "gpt2"
     )
+
+    tokenizer = AutoTokenizer.from_pretrained("gpt2")
+
+    # Log some samples from each dataset
+    logger.info("Sample from training dataset:")
+    logger.info(
+        f"Text: {tokenizer.decode(train_dataset[0]['input_ids'], skip_special_tokens=True)}"
+    )
+    logger.info(f"Input IDs: {train_dataset[0]['input_ids']}")
+    logger.info(f"Attention mask: {train_dataset[0]['attention_mask']}")
+
+    logger.info("\nSample from validation dataset:")
+    logger.info(
+        f"Text: {tokenizer.decode(val_dataset[0]['input_ids'], skip_special_tokens=True)}"
+    )
+    logger.info(f"Input IDs: {val_dataset[0]['input_ids']}")
+    logger.info(f"Attention mask: {val_dataset[0]['attention_mask']}")
+
+    logger.info("\nSample from test dataset:")
+    logger.info(
+        f"Text: {tokenizer.decode(test_dataset[0]['input_ids'], skip_special_tokens=True)}"
+    )
+    logger.info(f"Input IDs: {test_dataset[0]['input_ids']}")
+    logger.info(f"Attention mask: {test_dataset[0]['attention_mask']}")
+
+    exit()
 
     # Create dataloaders
     train_loader, val_loader, test_loader = create_dataloaders(
-        train_data, val_data, test_data, config["sequence_length"], config["batch_size"]
+        train_dataset,
+        val_dataset,
+        test_dataset,
+        config["sequence_length"],
+        config["batch_size"],
     )
 
     # Initialize model
