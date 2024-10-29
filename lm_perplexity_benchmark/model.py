@@ -4,40 +4,90 @@ import torch
 import torch.nn as nn
 
 
+class ResidualLSTMLayer(nn.Module):
+    """
+    A single LSTM layer with residual connection.
+    """
+
+    def __init__(self, input_size: int, hidden_size: int, dropout: float = 0.5) -> None:
+        """
+        Initialize the residual LSTM layer.
+        @param input_size: Size of the input features
+        @param hidden_size: Size of the hidden state
+        @param dropout: Dropout probability
+        """
+        super().__init__()
+        self.lstm = nn.LSTM(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=1,
+            batch_first=True,
+        )
+        self.dropout = nn.Dropout(dropout)
+
+        # Add a projection layer if input and hidden sizes differ
+        self.projection = None
+        if input_size != hidden_size:
+            self.projection = nn.Linear(input_size, hidden_size)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass with residual connection.
+        @param x: Input tensor of shape (batch_size, sequence_length, input_size)
+        @return: Output tensor of shape (batch_size, sequence_length, hidden_size)
+        """
+        residual = x if self.projection is None else self.projection(x)
+        output, _ = self.lstm(x)
+        output = self.dropout(output)
+        return output + residual
+
+
 class LSTMModel(nn.Module):
     """
-    A LSTM language model.
+    A sequence-to-sequence LSTM language model with residual connections.
     """
 
     def __init__(
         self,
-        input_size: int,
+        vocab_size: int,
         embedding_size: int,
         hidden_size: int,
         num_layers: int,
-        dropout: float = 0.5,
+        dropout: float = 0.3,
     ) -> None:
         """
         Initialize the model.
-
-        @param input_size: The size of the input.
-        @param embedding_size: The size of the embedding.
-        @param hidden_size: The size of the hidden state.
-        @param num_layers: The number of layers.
-        @param dropout: The dropout probability.
+        @param vocab_size: Size of the vocabulary
+        @param embedding_size: Size of the embeddings
+        @param hidden_size: Size of the hidden state
+        @param num_layers: Number of stacked LSTM layers
+        @param dropout: Dropout probability
         """
-        super(LSTMModel, self).__init__()
+        super().__init__()
 
-        self.embedding = nn.Embedding(input_size, embedding_size)
-        self.lstm = nn.LSTM(
-            embedding_size,
-            hidden_size,
-            num_layers,
-            dropout=dropout if num_layers > 1 else 0,
-            batch_first=True,
+        self.embedding = nn.Embedding(vocab_size, embedding_size)
+
+        self.embedding_dropout = nn.Dropout(dropout)
+
+        # First LSTM layer processes embeddings
+        self.first_layer = ResidualLSTMLayer(
+            input_size=embedding_size, hidden_size=hidden_size, dropout=dropout
         )
-        self.dropout = nn.Dropout(dropout)
-        self.fc = nn.Linear(hidden_size, input_size)
+
+        # Additional layers process hidden states
+        self.layers = nn.ModuleList(
+            [
+                ResidualLSTMLayer(
+                    input_size=hidden_size, hidden_size=hidden_size, dropout=dropout
+                )
+                for _ in range(num_layers - 1)
+            ]
+        )
+
+        self.output = nn.Linear(hidden_size, vocab_size)
+
+        # Tie weights between input embedding and output embedding
+        self.output.weight = self.embedding.weight
 
         # Initialize weights
         self._init_weights()
@@ -48,39 +98,27 @@ class LSTMModel(nn.Module):
         """
         init_range = 0.1
         self.embedding.weight.data.uniform_(-init_range, init_range)
-        self.fc.bias.data.zero_()
-        self.fc.weight.data.uniform_(-init_range, init_range)
+        self.output.bias.data.zero_()
 
-    def forward(
-        self, x: torch.Tensor, hidden: Optional[torch.Tensor] = None
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass of the model.
-
-        @param x: The input tensor.
-        @param hidden: The hidden state.
-        @return: The output tensor and the hidden state.
+        @param x: Input tensor of shape (batch_size, sequence_length)
+        @return: Output tensor of shape (batch_size, sequence_length, vocab_size)
         """
-        embeds = self.embedding(x)
-        output, hidden = self.lstm(embeds, hidden)
-        output = self.dropout(output)
-        logits = self.fc(output)
-        return logits, hidden
+        # (batch_size, sequence_length) -> (batch_size, sequence_length, embedding_size)
+        x = self.embedding(x)
+        x = self.embedding_dropout(x)
 
-    def init_hidden(
-        self, batch_size: int, device: torch.device
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Initialize the hidden state of the model.
+        # Process through first LSTM layer
+        x = self.first_layer(x)
 
-        @param batch_size: The batch size.
-        @param device: The device.
-        @return: The hidden state.
-        """
-        weight = next(self.parameters())
-        hidden_size = self.lstm.hidden_size
-        num_layers = self.lstm.num_layers
-        return (
-            weight.new_zeros(num_layers, batch_size, hidden_size).to(device),
-            weight.new_zeros(num_layers, batch_size, hidden_size).to(device),
-        )
+        # Process through additional layers
+        for layer in self.layers:
+            x = layer(x)
+
+        # Project to vocabulary size
+        # (batch_size, sequence_length, hidden_size) -> (batch_size, sequence_length, vocab_size)
+        logits = self.output(x)
+
+        return logits

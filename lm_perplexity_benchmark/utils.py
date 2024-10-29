@@ -136,13 +136,3 @@ def create_dataloaders(
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     return train_loader, val_loader, test_loader
-
-
-def compute_bpc(loss: float) -> float:
-    """
-    Convert loss to bits per character (BPC).
-
-    @param loss: The loss.
-    @return: The BPC.
-    """
-    return loss / np.log(2)
