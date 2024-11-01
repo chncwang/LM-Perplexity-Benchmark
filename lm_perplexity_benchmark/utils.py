@@ -41,6 +41,10 @@ def setup_logger(name: str, log_file: str, level: int = logging.INFO) -> logging
     logger = logging.getLogger(name)
     logger.setLevel(level)
 
+    # Set urllib3.connectionpool logging level to INFO
+    urllib3_logger = logging.getLogger("urllib3.connectionpool")
+    urllib3_logger.setLevel(logging.INFO)
+
     return logger
 
 

@@ -46,7 +46,9 @@ def train_epoch(
     total_loss = 0
     hidden = None
 
-    for batch_idx, (data, target) in enumerate(tqdm(train_loader, desc="Training")):
+    for batch_idx, batch in enumerate(tqdm(train_loader, desc="Training")):
+        logger.debug(f"train_epoch: Batch {batch_idx}: {batch}")
+        data, target = batch[:2]
         data, target = data.to(device), target.to(device)
 
         optimizer.zero_grad()
@@ -133,6 +135,12 @@ def parse_args():
     parser.add_argument(
         "--max_length", type=int, default=512, help="Maximum sequence length"
     )
+    parser.add_argument(
+        "--log_level",
+        type=str,
+        default="INFO",
+        help="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
+    )
     return parser.parse_args()
 
 
@@ -170,6 +178,7 @@ def main():
     logger = setup_logger(
         "wikitext103_training",
         os.path.join(config["log_dir"], f"training_{timestamp}.log"),
+        level=getattr(logging, args.log_level.upper(), logging.INFO),
     )
 
     # Save configuration
