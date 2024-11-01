@@ -32,24 +32,20 @@ def train_epoch(
 ) -> float:
     """
     Train one epoch of the model.
-
-    @param model: The model to train.
-    @param train_loader: The training data loader.
-    @param criterion: The loss criterion.
-    @param optimizer: The optimizer.
-    @param device: The device to train on.
-    @param clip_value: The gradient clipping value.
-    @param logger: The logger.
-    @return: The average loss for the epoch.
     """
     model.train()
     total_loss = 0
     hidden = None
 
-    for batch_idx, batch in enumerate(tqdm(train_loader, desc="Training")):
-        logger.debug(f"train_epoch: Batch {batch_idx}: {batch}")
-        data, target = batch[:2]
-        data, target = data.to(device), target.to(device)
+    for batch_idx, (input_ids, target_ids, mask) in enumerate(
+        tqdm(train_loader, desc="Training")
+    ):
+        logger.debug(f"train_epoch: Batch {batch_idx}: input shape {input_ids.shape}")
+
+        # Move everything to device
+        input_ids = input_ids.to(device)
+        target_ids = target_ids.to(device)
+        mask = mask.to(device)
 
         optimizer.zero_grad()
 
@@ -57,8 +53,19 @@ def train_epoch(
         if hidden is not None:
             hidden = tuple(h.detach() for h in hidden)
 
-        output, hidden = model(data, hidden)
-        loss = criterion(output.view(-1, output.size(-1)), target.view(-1))
+        # Forward pass
+        output = model(input_ids)
+
+        # Calculate loss only on non-padded positions
+        output = output.view(-1, output.size(-1))
+        target_ids = target_ids.view(-1)
+        mask = mask.view(-1)
+
+        # Apply mask to exclude padding tokens from loss calculation
+        output = output[mask]
+        target_ids = target_ids[mask]
+
+        loss = criterion(output, target_ids)
 
         loss.backward()
         clip_grad_norm_(model.parameters(), clip_value)
@@ -82,23 +89,31 @@ def evaluate(
 ) -> float:
     """
     Evaluate the model on the validation set.
-
-    @param model: The model to evaluate.
-    @param eval_loader: The validation data loader.
-    @param criterion: The loss criterion.
-    @param device: The device to evaluate on.
-    @return: The average loss for the validation set.
     """
     model.eval()
     total_loss = 0
     hidden = None
 
     with torch.no_grad():
-        for data, target in eval_loader:
-            data, target = data.to(device), target.to(device)
+        for input_ids, target_ids, mask in eval_loader:
+            # Move everything to device
+            input_ids = input_ids.to(device)
+            target_ids = target_ids.to(device)
+            mask = mask.to(device)
 
-            output, hidden = model(data, hidden)
-            loss = criterion(output.view(-1, output.size(-1)), target.view(-1))
+            # Forward pass
+            output = model(input_ids)
+
+            # Calculate loss only on non-padded positions
+            output = output.view(-1, output.size(-1))
+            target_ids = target_ids.view(-1)
+            mask = mask.view(-1)
+
+            # Apply mask to exclude padding tokens from loss calculation
+            output = output[mask]
+            target_ids = target_ids[mask]
+
+            loss = criterion(output, target_ids)
             total_loss += loss.item()
 
             # Detach hidden states
@@ -234,6 +249,8 @@ def main():
         val_dataset,
         test_dataset,
         hyperparameters["batch_size"],
+        tokenizer,
+        hyperparameters["max_length"],
     )
 
     # Initialize model

@@ -6,8 +6,10 @@ import numpy as np
 import requests
 import torch
 from datasets import Dataset, load_dataset
-from torch.utils.data import DataLoader, Dataset
-from transformers import AutoTokenizer
+from torch.utils.data import DataLoader
+from transformers import AutoTokenizer, PreTrainedTokenizer
+
+from lm_perplexity_benchmark.datasets import RnnDataset
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +127,8 @@ def create_dataloaders(
     val_dataset: Dataset,
     test_dataset: Dataset,
     batch_size: int,
+    tokenizer: PreTrainedTokenizer,
+    max_length: int,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
     """
     Create DataLoader objects for training, validation, and testing using Hugging Face Datasets.
@@ -133,10 +137,23 @@ def create_dataloaders(
     @param val_dataset: The validation dataset.
     @param test_dataset: The test dataset.
     @param batch_size: The batch size.
+    @param tokenizer: The tokenizer.
+    @param max_length: The maximum sequence length.
     @return: The train, validation, and test DataLoader objects.
     """
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    # Wrap the Hugging Face datasets with RnnDataset
+    train_dataset = RnnDataset(train_dataset, tokenizer, max_length=max_length)
+    val_dataset = RnnDataset(val_dataset, tokenizer, max_length=max_length)
+    test_dataset = RnnDataset(test_dataset, tokenizer, max_length=max_length)
+
+    train_loader = DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=True, num_workers=4
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=batch_size, shuffle=False, num_workers=4
+    )
+    test_loader = DataLoader(
+        test_dataset, batch_size=batch_size, shuffle=False, num_workers=4
+    )
 
     return train_loader, val_loader, test_loader
