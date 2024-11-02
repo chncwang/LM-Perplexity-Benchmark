@@ -126,6 +126,7 @@ def create_dataloaders(
     train_dataset: Dataset,
     val_dataset: Dataset,
     test_dataset: Dataset,
+    dataset_name: str,
     batch_size: int,
     tokenizer: PreTrainedTokenizer,
     max_length: int,
@@ -136,15 +137,31 @@ def create_dataloaders(
     @param train_dataset: The training dataset.
     @param val_dataset: The validation dataset.
     @param test_dataset: The test dataset.
+    @param dataset_name: The name of the dataset.
     @param batch_size: The batch size.
     @param tokenizer: The tokenizer.
     @param max_length: The maximum sequence length.
     @return: The train, validation, and test DataLoader objects.
     """
     # Wrap the Hugging Face datasets with RnnDataset
-    train_dataset = RnnDataset(train_dataset, tokenizer, max_length=max_length)
-    val_dataset = RnnDataset(val_dataset, tokenizer, max_length=max_length)
-    test_dataset = RnnDataset(test_dataset, tokenizer, max_length=max_length)
+    train_dataset = RnnDataset(
+        train_dataset,
+        f"empty_filtered_{dataset_name}_train",
+        tokenizer,
+        max_length=max_length,
+    )
+    val_dataset = RnnDataset(
+        val_dataset,
+        f"empty_filtered_{dataset_name}_val",
+        tokenizer,
+        max_length=max_length,
+    )
+    test_dataset = RnnDataset(
+        test_dataset,
+        f"empty_filtered_{dataset_name}_test",
+        tokenizer,
+        max_length=max_length,
+    )
 
     train_loader = DataLoader(
         train_dataset, batch_size=batch_size, shuffle=True, num_workers=4

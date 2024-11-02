@@ -29,6 +29,7 @@ def train_epoch(
     device: torch.device,
     clip_value: float,
     logger: logging.Logger,
+    tokenizer: AutoTokenizer,
 ) -> float:
     """
     Train one epoch of the model.
@@ -36,6 +37,8 @@ def train_epoch(
     model.train()
     total_loss = 0
     hidden = None
+
+    smoothed_loss = 0  # Initialize smoothed loss
 
     for batch_idx, (input_ids, target_ids, mask) in enumerate(
         tqdm(train_loader, desc="Training")
@@ -73,10 +76,23 @@ def train_epoch(
 
         total_loss += loss.item()
 
+        # Update smoothed loss
+        smoothed_loss = 0.999 * smoothed_loss + 0.001 * loss.item()
+
         if batch_idx % 100 == 0:
             logger.info(
-                f"train_epoch: Batch {batch_idx}/{len(train_loader)}, Loss: {loss.item():.4f}"
+                f"train_epoch: Batch {batch_idx}/{len(train_loader)}, Smoothed Loss: {smoothed_loss:.4f}"
             )
+            # Log the decoded input sequence
+            decoded_sequence = tokenizer.decode(input_ids[0], skip_special_tokens=False)
+            logger.info(f"train_epoch: Decoded Input Sequence: {decoded_sequence}")
+
+            # Log the model's predicted tokens
+            predicted_ids = torch.argmax(output, dim=-1)
+            decoded_predictions = tokenizer.decode(
+                predicted_ids[0], skip_special_tokens=False
+            )
+            logger.info(f"train_epoch: Predicted Tokens: {decoded_predictions}")
 
     return total_loss / len(train_loader)
 
@@ -221,33 +237,12 @@ def main():
     vocab_size = len(tokenizer)
     logger.info(f"main: Vocabulary size: {vocab_size}")
 
-    # Log some samples from each dataset
-    logger.info("main: Sample from training dataset:")
-    logger.info(
-        f"Text: {tokenizer.decode(train_dataset[0]['input_ids'], skip_special_tokens=True)}"
-    )
-    logger.info(f"main: Input IDs: {train_dataset[0]['input_ids']}")
-    logger.info(f"main: Attention mask: {train_dataset[0]['attention_mask']}")
-
-    logger.info("main: Sample from validation dataset:")
-    logger.info(
-        f"Text: {tokenizer.decode(val_dataset[0]['input_ids'], skip_special_tokens=True)}"
-    )
-    logger.info(f"main: Input IDs: {val_dataset[0]['input_ids']}")
-    logger.info(f"main: Attention mask: {val_dataset[0]['attention_mask']}")
-
-    logger.info("main: Sample from test dataset:")
-    logger.info(
-        f"Text: {tokenizer.decode(test_dataset[0]['input_ids'], skip_special_tokens=True)}"
-    )
-    logger.info(f"main: Input IDs: {test_dataset[0]['input_ids']}")
-    logger.info(f"main: Attention mask: {test_dataset[0]['attention_mask']}")
-
     # Create dataloaders
     train_loader, val_loader, test_loader = create_dataloaders(
         train_dataset,
         val_dataset,
         test_dataset,
+        "wikitext103",
         hyperparameters["batch_size"],
         tokenizer,
         hyperparameters["max_length"],
@@ -281,6 +276,7 @@ def main():
             device,
             hyperparameters["clip_value"],
             logger,
+            tokenizer,
         )
         val_loss = evaluate(model, val_loader, criterion, device)
 
