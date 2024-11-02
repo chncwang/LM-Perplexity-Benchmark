@@ -21,6 +21,19 @@ from lm_perplexity_benchmark.utils import (
 )
 
 
+def remove_consecutive_eos(text: str, eos_token: str) -> str:
+    """
+    Remove consecutive end-of-sequence tokens from text.
+    @param text: The text to remove consecutive end-of-sequence tokens from.
+    @param eos_token: The end-of-sequence token.
+    @return: The text with consecutive end-of-sequence tokens removed.
+    """
+    if eos_token:
+        while eos_token + eos_token in text:
+            text = text.replace(eos_token + eos_token, eos_token)
+    return text
+
+
 def train_epoch(
     model: nn.Module,
     train_loader: DataLoader,
@@ -43,7 +56,10 @@ def train_epoch(
     for batch_idx, (input_ids, target_ids, mask) in enumerate(
         tqdm(train_loader, desc="Training")
     ):
-        logger.debug(f"train_epoch: Batch {batch_idx}: input shape {input_ids.shape}")
+        if batch_idx % 100 == 0:
+            logger.debug(
+                f"train_epoch: Batch {batch_idx}: input shape: {input_ids.shape}, target shape: {target_ids.shape}, mask shape: {mask.shape}"
+            )
 
         # Move everything to device
         input_ids = input_ids.to(device)
@@ -83,9 +99,18 @@ def train_epoch(
             logger.info(
                 f"train_epoch: Batch {batch_idx}/{len(train_loader)}, Smoothed Loss: {smoothed_loss:.4f}"
             )
-            # Log the decoded input sequence
+            # Decode the input sequence
             decoded_sequence = tokenizer.decode(input_ids[0], skip_special_tokens=False)
+
+            # Remove consecutive end tokens and log sequences
+            eos_token = tokenizer.eos_token
+            decoded_sequence = remove_consecutive_eos(decoded_sequence, eos_token)
             logger.info(f"train_epoch: Decoded Input Sequence: {decoded_sequence}")
+
+            # Log the target sequence at debug level
+            decoded_target = tokenizer.decode(target_ids, skip_special_tokens=False)
+            decoded_target = remove_consecutive_eos(decoded_target, eos_token)
+            logger.debug(f"train_epoch: Target Sequence: {decoded_target}")
 
             # Log the model's predicted tokens
             predicted_ids = torch.argmax(output, dim=-1)
