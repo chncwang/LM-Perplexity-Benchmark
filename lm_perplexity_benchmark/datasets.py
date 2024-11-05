@@ -3,7 +3,6 @@ import os
 import pickle
 
 import torch
-from datasets import Dataset as HFDataset
 from torch.utils.data import Dataset
 from tqdm import tqdm
 from transformers import PreTrainedTokenizer
@@ -19,24 +18,37 @@ class RnnDataset(Dataset):
 
     def __init__(
         self,
-        dataset: HFDataset,
+        dataset: Dataset,
         dataset_name: str,
         tokenizer: PreTrainedTokenizer,
         max_length: int = 512,
+        use_cache: bool = False,
     ):
         """
         Initialize the RNN dataset.
-        @param dataset: HuggingFace dataset containing tokenized text
+        @param dataset: An enumeratable object where each element is a dictionary containing an 'input_ids' field
         @param dataset_name: Name of the dataset
         @param tokenizer: The tokenizer used for getting special tokens
         @param max_length: Maximum sequence length
+        @param use_cache: Whether to use cached indices or not
         """
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.use_cache = use_cache
         # Ensure we have the necessary special tokens
         self.pad_token_id = tokenizer.pad_token_id
         if self.pad_token_id is None:
             self.pad_token_id = tokenizer.eos_token_id
+
+        # Get the start token ID, fallback to BOS token if not available
+        self.start_token_id = tokenizer.cls_token_id
+        if self.start_token_id is None:
+            self.start_token_id = tokenizer.bos_token_id
+        if self.start_token_id is None:
+            logger.warning(
+                "No start token found in tokenizer, using EOS token as start token"
+            )
+            self.start_token_id = tokenizer.eos_token_id
 
         # Ensure the cache directory exists
         cache_dir = "./cache"
@@ -47,8 +59,8 @@ class RnnDataset(Dataset):
         cache_file: str = os.path.join(cache_dir, f"{dataset_name}_cache.pkl")
         logger.info(f"RnnDataset.__init__: cache_file: {cache_file}")
 
-        # Check if cache file exists
-        if os.path.exists(cache_file):
+        # Check if cache file exists and use_cache is True
+        if self.use_cache and os.path.exists(cache_file):
             logger.info("RnnDataset.__init__: Loading cached indices...")
             with open(cache_file, "rb") as f:
                 non_empty_indices = pickle.load(f)
@@ -57,17 +69,21 @@ class RnnDataset(Dataset):
             non_empty_indices = [
                 i
                 for i, item in enumerate(tqdm(dataset, desc="Filtering sequences"))
-                if len(item["input_ids"]) > 1
+                if item["input_ids"][0] != self.tokenizer.eos_token_id
             ]
-            # Save indices to cache file
-            with open(cache_file, "wb") as f:
-                pickle.dump(non_empty_indices, f)
-
-        if len(non_empty_indices) < len(dataset):
+            filtered_percentage = (
+                (len(dataset) - len(non_empty_indices)) / len(dataset) * 100
+            )
             logger.info(
                 f"RnnDataset.__init__: Filtered out {len(dataset) - len(non_empty_indices)} empty sequences "
-                f"({len(non_empty_indices)} sequences remaining)"
+                f"({filtered_percentage:.2f}% of total, {len(non_empty_indices)} sequences remaining)"
             )
+            # Save indices to cache file if use_cache is True
+            if self.use_cache:
+                with open(cache_file, "wb") as f:
+                    pickle.dump(non_empty_indices, f)
+
+        if len(non_empty_indices) < len(dataset):
             # Create a new filtered dataset
             self.dataset = dataset.select(non_empty_indices)
         else:
@@ -86,30 +102,55 @@ class RnnDataset(Dataset):
         item = self.dataset[idx]
         token_ids = item["input_ids"]
 
-        # Ensure we don't exceed max_length
-        if len(token_ids) > self.max_length:
+        # Raise an error if the first token is eos_token
+        if token_ids[0] == self.tokenizer.eos_token_id:
+            raise ValueError(
+                f"First token is eos_token_id ({self.tokenizer.eos_token_id})"
+            )
+
+        # Ensure we don't exceed max_length (accounting for start token)
+        if len(token_ids) >= self.max_length:
             token_ids = token_ids[: self.max_length]
 
-        # Create input sequence (all tokens except last)
-        input_ids = token_ids[:-1]
-        # Create target sequence (all tokens except first)
-        target_ids = token_ids[1:]
+        # Create input sequence starting with start token
+        input_ids = [self.start_token_id] + token_ids[:-1]
+        # Create target sequence starting with the first actual token
+        target_ids = token_ids
 
-        # Calculate actual sequence length
-        seq_length = len(input_ids)
+        # Find the position of the first EOS token after the actual tokens
+        # Skip the very first token in case it's an EOS token at the start
+        eos_positions = [
+            i
+            for i, token in enumerate(input_ids[1:], start=1)
+            if token == self.tokenizer.eos_token_id
+        ]
+        seq_length = len(input_ids) if not eos_positions else eos_positions[0]
+        if seq_length > self.max_length:
+            logger.error(f"RnnDataset.__getitem__: input_ids: {input_ids}")
+            logger.error(f"RnnDataset.__getitem__: eos_positions: {eos_positions}")
+            raise ValueError(
+                f"Sequence length ({seq_length}) exceeds max_length ({self.max_length})"
+            )
 
         # Create attention mask (1 for real tokens, 0 for padding)
-        mask = torch.ones(seq_length, dtype=torch.bool)
+        mask = torch.zeros(self.max_length, dtype=torch.bool)
+        mask[:seq_length] = True
 
-        # Pad sequences if necessary
-        if seq_length < self.max_length - 1:  # -1 because we removed one token
-            padding_length = self.max_length - 1 - seq_length
-            # Pad input_ids
-            input_ids.extend([self.pad_token_id] * padding_length)
-            # Pad target_ids
-            target_ids.extend([self.pad_token_id] * padding_length)
-            # Update mask for padding
-            mask = torch.cat([mask, torch.zeros(padding_length, dtype=torch.bool)])
+        # Raise an error if the three tensors are not of the same length, namely self.max_length
+        if (
+            len(input_ids) != len(target_ids)
+            or len(input_ids) != len(mask)
+            or len(mask) != self.max_length
+        ):
+            logger.error(
+                f"RnnDataset.__getitem__: len(input_ids): {len(input_ids)} len(target_ids): {len(target_ids)} len(mask): {len(mask)}"
+            )
+            logger.error(f"RnnDataset.__getitem__: input_ids: {input_ids}")
+            logger.error(f"RnnDataset.__getitem__: target_ids: {target_ids}")
+            logger.error(f"RnnDataset.__getitem__: mask: {mask}")
+            raise ValueError(
+                "Input, target, and mask tensors are not of the same length"
+            )
 
         return (
             torch.tensor(input_ids, dtype=torch.long),

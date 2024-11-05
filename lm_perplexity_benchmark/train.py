@@ -15,23 +15,9 @@ from transformers import AutoTokenizer
 from lm_perplexity_benchmark.model import LSTMModel
 from lm_perplexity_benchmark.utils import (
     create_dataloaders,
-    download_wikitext103,
+    download_and_tokenize_wikitext103,
     setup_logger,
-    tokenize_wikitext_datasets,
 )
-
-
-def remove_consecutive_eos(text: str, eos_token: str) -> str:
-    """
-    Remove consecutive end-of-sequence tokens from text.
-    @param text: The text to remove consecutive end-of-sequence tokens from.
-    @param eos_token: The end-of-sequence token.
-    @return: The text with consecutive end-of-sequence tokens removed.
-    """
-    if eos_token:
-        while eos_token + eos_token in text:
-            text = text.replace(eos_token + eos_token, eos_token)
-    return text
 
 
 def train_epoch(
@@ -76,15 +62,15 @@ def train_epoch(
         output = model(input_ids)
 
         # Calculate loss only on non-padded positions
-        output = output.view(-1, output.size(-1))
-        target_ids = target_ids.view(-1)
-        mask = mask.view(-1)
+        output_for_loss = output.view(-1, output.size(-1))
+        target_ids_for_loss = target_ids.view(-1)
+        mask_for_loss = mask.view(-1)
 
         # Apply mask to exclude padding tokens from loss calculation
-        output = output[mask]
-        target_ids = target_ids[mask]
+        output_for_loss = output_for_loss[mask_for_loss]
+        target_ids_for_loss = target_ids_for_loss[mask_for_loss]
 
-        loss = criterion(output, target_ids)
+        loss = criterion(output_for_loss, target_ids_for_loss)
 
         loss.backward()
         clip_grad_norm_(model.parameters(), clip_value)
@@ -99,23 +85,25 @@ def train_epoch(
             logger.info(
                 f"train_epoch: Batch {batch_idx}/{len(train_loader)}, Smoothed Loss: {smoothed_loss:.4f}"
             )
+            logger.debug(f"train_epoch: mask[0]: {mask[0]}")
             # Decode the input sequence
-            decoded_sequence = tokenizer.decode(input_ids[0], skip_special_tokens=False)
-
-            # Remove consecutive end tokens and log sequences
-            eos_token = tokenizer.eos_token
-            decoded_sequence = remove_consecutive_eos(decoded_sequence, eos_token)
+            # Apply mask to get only valid tokens before decoding
+            valid_tokens = input_ids[0][mask[0]]
+            decoded_sequence = tokenizer.decode(valid_tokens, skip_special_tokens=False)
             logger.info(f"train_epoch: Decoded Input Sequence: {decoded_sequence}")
 
             # Log the target sequence at debug level
-            decoded_target = tokenizer.decode(target_ids, skip_special_tokens=False)
-            decoded_target = remove_consecutive_eos(decoded_target, eos_token)
+            valid_target_tokens = target_ids[0][mask[0]]
+            decoded_target = tokenizer.decode(
+                valid_target_tokens, skip_special_tokens=False
+            )
             logger.debug(f"train_epoch: Target Sequence: {decoded_target}")
 
             # Log the model's predicted tokens
-            predicted_ids = torch.argmax(output, dim=-1)
+            predicted_ids = torch.argmax(output[0], dim=-1)
+            valid_predicted_ids = predicted_ids[mask[0]]
             decoded_predictions = tokenizer.decode(
-                predicted_ids[0], skip_special_tokens=False
+                valid_predicted_ids, skip_special_tokens=False
             )
             logger.info(f"train_epoch: Predicted Tokens: {decoded_predictions}")
 
@@ -251,9 +239,8 @@ def main():
     logger.info(f"Using device: {device}")
 
     # Load and preprocess data
-    train_dataset, val_dataset, test_dataset = download_wikitext103()
-    train_dataset, val_dataset, test_dataset = tokenize_wikitext_datasets(
-        train_dataset, val_dataset, test_dataset, "gpt2", hyperparameters["max_length"]
+    train_dataset, val_dataset, test_dataset = download_and_tokenize_wikitext103(
+        "gpt2", hyperparameters["max_length"]
     )
 
     tokenizer = AutoTokenizer.from_pretrained("gpt2")

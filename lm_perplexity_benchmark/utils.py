@@ -122,6 +122,22 @@ def tokenize_wikitext_datasets(
     return tokenized_train, tokenized_val, tokenized_test
 
 
+def download_and_tokenize_wikitext103(
+    tokenizer_name: str, max_length: int = 512
+) -> tuple[Dataset, Dataset, Dataset]:
+    """
+    Download and tokenize the Wikitext-103 dataset.
+
+    @param tokenizer_name: The tokenizer name for selecting the tokenizer
+    @param max_length: The maximum length for token sequences (default is 512)
+    @return: Tuple of tokenized (train, validation, test) datasets
+    """
+    train_dataset, val_dataset, test_dataset = download_wikitext103()
+    return tokenize_wikitext_datasets(
+        train_dataset, val_dataset, test_dataset, tokenizer_name, max_length
+    )
+
+
 def create_dataloaders(
     train_dataset: Dataset,
     val_dataset: Dataset,
@@ -149,18 +165,21 @@ def create_dataloaders(
         f"empty_filtered_{dataset_name}_train",
         tokenizer,
         max_length=max_length,
+        use_cache=True,
     )
     val_dataset = RnnDataset(
         val_dataset,
         f"empty_filtered_{dataset_name}_val",
         tokenizer,
         max_length=max_length,
+        use_cache=True,
     )
     test_dataset = RnnDataset(
         test_dataset,
         f"empty_filtered_{dataset_name}_test",
         tokenizer,
         max_length=max_length,
+        use_cache=True,
     )
 
     train_loader = DataLoader(
