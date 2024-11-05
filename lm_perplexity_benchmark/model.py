@@ -84,6 +84,10 @@ class LSTMModel(nn.Module):
             ]
         )
 
+        # If the embedding size is different from the hidden size, add a projection layer
+        if embedding_size != hidden_size:
+            self.projection = nn.Linear(hidden_size, embedding_size)
+
         self.output = nn.Linear(hidden_size, vocab_size)
 
         # Tie weights between input embedding and output embedding
@@ -116,6 +120,10 @@ class LSTMModel(nn.Module):
         # Process through additional layers
         for layer in self.layers:
             x = layer(x)
+
+        # Project to hidden size if necessary
+        if self.projection is not None:
+            x = self.projection(x)
 
         # Project to vocabulary size
         # (batch_size, sequence_length, hidden_size) -> (batch_size, sequence_length, vocab_size)
