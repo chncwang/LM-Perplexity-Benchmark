@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.nn.utils import clip_grad_norm_
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -185,6 +186,12 @@ def parse_args():
         default="INFO",
         help="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
     )
+    parser.add_argument(
+        "--weight_decay",
+        type=float,
+        default=0.01,
+        help="Weight decay for AdamW optimizer",
+    )
     return parser.parse_args()
 
 
@@ -204,6 +211,7 @@ def main():
         "clip_value": args.clip_value,
         "num_epochs": args.num_epochs,
         "max_length": args.max_length,
+        "weight_decay": args.weight_decay,
     }
 
     # Configuration
@@ -271,9 +279,17 @@ def main():
 
     # Loss and optimizer
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=hyperparameters["lr"])
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr=hyperparameters["lr"],
+        weight_decay=hyperparameters["weight_decay"],
+    )
 
-    # Training loop
+    # Initialize learning rate scheduler
+    scheduler = ReduceLROnPlateau(
+        optimizer, mode="min", factor=0.5, patience=3, verbose=True
+    )
+
     best_val_loss = float("inf")
 
     for epoch in range(hyperparameters["num_epochs"]):
@@ -291,6 +307,9 @@ def main():
             tokenizer,
         )
         val_loss = evaluate(model, val_loader, criterion, device)
+
+        # Step the scheduler
+        scheduler.step(val_loss)
 
         epoch_time = time.time() - start_time
 

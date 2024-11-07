@@ -87,6 +87,8 @@ class LSTMModel(nn.Module):
         # If the embedding size is different from the hidden size, add a projection layer
         if embedding_size != hidden_size:
             self.projection = nn.Linear(hidden_size, embedding_size)
+        else:
+            self.projection = None
 
         self.output = nn.Linear(hidden_size, vocab_size)
 
