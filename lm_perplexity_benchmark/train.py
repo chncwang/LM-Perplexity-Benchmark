@@ -175,7 +175,16 @@ def parse_args():
         "--clip_value", type=float, default=0.25, help="Gradient clipping value"
     )
     parser.add_argument(
-        "--num_epochs", type=int, default=40, help="Number of training epochs"
+        "--num_epochs",
+        type=int,
+        default=None,
+        help="Number of training epochs (None for unlimited)",
+    )
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=5,
+        help="Early stopping patience (number of epochs without improvement)",
     )
     parser.add_argument(
         "--max_length", type=int, default=512, help="Maximum sequence length"
@@ -213,6 +222,7 @@ def main():
         "max_length": args.max_length,
         "weight_decay": args.weight_decay,
     }
+    logger.info(f"main: Hyperparameters: {hyperparameters}")
 
     # Configuration
     config = {
@@ -220,6 +230,7 @@ def main():
         "log_dir": "logs",
         "model_dir": "models",
     }
+    logger.info(f"main: Config: {config}")
 
     # Create directories
     os.makedirs(config["log_dir"], exist_ok=True)
@@ -291,9 +302,14 @@ def main():
     )
 
     best_val_loss = float("inf")
+    patience_counter = 0
+    epoch = 0
 
-    for epoch in range(hyperparameters["num_epochs"]):
-        logger.info(f"main: Epoch {epoch+1}/{hyperparameters['num_epochs']}")
+    while True:
+        if args.num_epochs is not None and epoch >= args.num_epochs:
+            break
+
+        logger.info(f"main: Epoch {epoch+1}")
         start_time = time.time()
 
         train_loss = train_epoch(
@@ -318,9 +334,10 @@ def main():
         logger.info(f"main: Val Loss: {val_loss:.4f}")
         logger.info(f"main: Time: {epoch_time:.2f}s")
 
-        # Save best model
+        # Save best model and check early stopping
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            patience_counter = 0
             torch.save(
                 {
                     "epoch": epoch,
@@ -332,6 +349,13 @@ def main():
                 os.path.join(config["model_dir"], "best_model.pt"),
             )
             logger.info("main: Saved best model")
+        else:
+            patience_counter += 1
+            if patience_counter >= args.patience:
+                logger.info(f"main: Early stopping triggered after {epoch+1} epochs")
+                break
+
+        epoch += 1
 
     # Final evaluation on test set
     model.load_state_dict(
