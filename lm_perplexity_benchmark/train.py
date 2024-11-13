@@ -206,6 +206,11 @@ def parse_args():
         default=0.01,
         help="Weight decay for AdamW optimizer",
     )
+    parser.add_argument(
+        "--disable_half_precision",
+        action="store_true",
+        help="Disable automatic mixed precision training",
+    )
     return parser.parse_args()
 
 
@@ -226,6 +231,7 @@ def main():
         "num_epochs": args.num_epochs,
         "max_length": args.max_length,
         "weight_decay": args.weight_decay,
+        "disable_half_precision": args.disable_half_precision,
     }
     logger.info(f"main: Hyperparameters: {hyperparameters}")
 
@@ -307,7 +313,9 @@ def main():
     )
 
     # Initialize the GradScaler
-    scaler = GradScaler(enabled=device.type == "cuda")
+    scaler = GradScaler(
+        enabled=device.type == "cuda" and not args.disable_half_precision
+    )
 
     best_val_loss = float("inf")
     patience_counter = 0
