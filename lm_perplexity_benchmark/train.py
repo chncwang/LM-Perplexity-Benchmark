@@ -7,6 +7,7 @@ import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.cuda.amp import GradScaler, autocast
 from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
@@ -30,6 +31,7 @@ def train_epoch(
     clip_value: float,
     logger: logging.Logger,
     tokenizer: AutoTokenizer,
+    scaler: GradScaler,
 ) -> float:
     """
     Train one epoch of the model.
@@ -59,23 +61,26 @@ def train_epoch(
         if hidden is not None:
             hidden = tuple(h.detach() for h in hidden)
 
-        # Forward pass
-        output = model(input_ids)
+        # Wrap forward and loss computation in autocast
+        with autocast(enabled=device.type == "cuda"):
+            output = model(input_ids)
 
-        # Calculate loss only on non-padded positions
-        output_for_loss = output.view(-1, output.size(-1))
-        target_ids_for_loss = target_ids.view(-1)
-        mask_for_loss = mask.view(-1)
+            # Calculate loss only on non-padded positions
+            output_for_loss = output.view(-1, output.size(-1))
+            target_ids_for_loss = target_ids.view(-1)
+            mask_for_loss = mask.view(-1)
 
-        # Apply mask to exclude padding tokens from loss calculation
-        output_for_loss = output_for_loss[mask_for_loss]
-        target_ids_for_loss = target_ids_for_loss[mask_for_loss]
+            output_for_loss = output_for_loss[mask_for_loss]
+            target_ids_for_loss = target_ids_for_loss[mask_for_loss]
 
-        loss = criterion(output_for_loss, target_ids_for_loss)
+            loss = criterion(output_for_loss, target_ids_for_loss)
 
-        loss.backward()
+        # Replace manual backward with scaler
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
         clip_grad_norm_(model.parameters(), clip_value)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
 
         total_loss += loss.item()
 
@@ -301,6 +306,9 @@ def main():
         optimizer, mode="min", factor=0.5, patience=3, verbose=True
     )
 
+    # Initialize the GradScaler
+    scaler = GradScaler(enabled=device.type == "cuda")
+
     best_val_loss = float("inf")
     patience_counter = 0
     epoch = 0
@@ -321,6 +329,7 @@ def main():
             hyperparameters["clip_value"],
             logger,
             tokenizer,
+            scaler,
         )
         val_loss = evaluate(model, val_loader, criterion, device)
 
