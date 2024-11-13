@@ -39,12 +39,20 @@ def train_epoch(
     model.train()
     total_loss = 0
     hidden = None
+    smoothed_loss = 0
 
-    smoothed_loss = 0  # Initialize smoothed loss
+    # Add timing variables
+    start_time = time.time()
+    total_tokens = 0
+    tokens_per_second = 0
 
     for batch_idx, (input_ids, target_ids, mask) in enumerate(
         tqdm(train_loader, desc="Training")
     ):
+        # Count tokens in this batch (sum of True values in mask)
+        batch_tokens = mask.sum().item()
+        total_tokens += batch_tokens
+
         if batch_idx % 100 == 0:
             logger.debug(
                 f"train_epoch: Batch {batch_idx}: input shape: {input_ids.shape}, target shape: {target_ids.shape}, mask shape: {mask.shape}"
@@ -88,8 +96,15 @@ def train_epoch(
         smoothed_loss = 0.999 * smoothed_loss + 0.001 * loss.item()
 
         if batch_idx % 100 == 0:
+            # Calculate tokens per second
+            elapsed_time = time.time() - start_time
+            if elapsed_time > 0:  # Avoid division by zero
+                tokens_per_second = total_tokens / elapsed_time
+
             logger.info(
-                f"train_epoch: Batch {batch_idx}/{len(train_loader)}, Smoothed Loss: {smoothed_loss:.4f}"
+                f"train_epoch: Batch {batch_idx}/{len(train_loader)}, "
+                f"Smoothed Loss: {smoothed_loss:.4f}, "
+                f"Tokens/sec: {tokens_per_second:.2f}"
             )
             logger.debug(f"train_epoch: mask[0]: {mask[0]}")
             # Decode the input sequence
@@ -215,11 +230,19 @@ def parse_args():
 
 
 def main():
-    """
-    Main function to train the model.
-    """
     args = parse_args()
 
+    # Setup logger first
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    logger = setup_logger(
+        "wikitext103_training",
+        os.path.join(
+            "logs", f"training_{timestamp}.log"
+        ),  # Using "logs" directly since config isn't created yet
+        level=getattr(logging, args.log_level.upper(), logging.INFO),
+    )
+
+    # Now we can use logger
     hyperparameters = {
         "batch_size": args.batch_size,
         "embedding_size": args.embedding_size,
@@ -246,14 +269,6 @@ def main():
     # Create directories
     os.makedirs(config["log_dir"], exist_ok=True)
     os.makedirs(config["model_dir"], exist_ok=True)
-
-    # Setup logger
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    logger = setup_logger(
-        "wikitext103_training",
-        os.path.join(config["log_dir"], f"training_{timestamp}.log"),
-        level=getattr(logging, args.log_level.upper(), logging.INFO),
-    )
 
     # Save configuration
     with open(os.path.join(config["log_dir"], "config.json"), "w") as f:
