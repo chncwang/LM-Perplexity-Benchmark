@@ -320,12 +320,16 @@ def main():
         hyperparameters["dropout"],
     ).to(device)
 
-    # Add compilation by default unless disabled
-    if not args.disable_compile:
+    # Only compile if using CUDA and compilation is not disabled
+    if not args.disable_compile and device.type == "cuda":
         logger.info("main: Compiling model with mode: reduce-overhead")
         # Set higher threshold for better compilation speed
         dynamo_config.cache_size_limit = 512
         model = torch.compile(model, mode="reduce-overhead")
+    else:
+        logger.info(
+            "main: Model compilation skipped (either disabled or not using CUDA)"
+        )
 
     # Loss and optimizer
     criterion = nn.CrossEntropyLoss()
