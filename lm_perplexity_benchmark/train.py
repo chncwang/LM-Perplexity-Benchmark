@@ -7,6 +7,7 @@ import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch._dynamo import config as dynamo_config
 from torch.cuda.amp import GradScaler, autocast
 from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -226,6 +227,11 @@ def parse_args():
         action="store_true",
         help="Disable automatic mixed precision training",
     )
+    parser.add_argument(
+        "--disable_compile",
+        action="store_true",
+        help="Disable PyTorch 2.0 compilation (not recommended)",
+    )
     return parser.parse_args()
 
 
@@ -313,6 +319,13 @@ def main():
         hyperparameters["num_layers"],
         hyperparameters["dropout"],
     ).to(device)
+
+    # Add compilation by default unless disabled
+    if not args.disable_compile:
+        logger.info("main: Compiling model with mode: reduce-overhead")
+        # Set higher threshold for better compilation speed
+        dynamo_config.cache_size_limit = 512
+        model = torch.compile(model, mode="reduce-overhead")
 
     # Loss and optimizer
     criterion = nn.CrossEntropyLoss()
