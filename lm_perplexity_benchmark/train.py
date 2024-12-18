@@ -204,8 +204,8 @@ def parse_args():
     parser.add_argument(
         "--patience",
         type=int,
-        default=5,
-        help="Early stopping patience (number of epochs without improvement)",
+        default=None,
+        help="Early stopping patience (number of epochs without improvement). Set to None to disable early stopping",
     )
     parser.add_argument(
         "--max_length", type=int, default=512, help="Maximum sequence length"
@@ -402,7 +402,7 @@ def main():
             logger.info("main: Saved best model")
         else:
             patience_counter += 1
-            if patience_counter >= args.patience:
+            if args.patience is not None and patience_counter >= args.patience:
                 logger.info(f"main: Early stopping triggered after {epoch+1} epochs")
                 break
 
