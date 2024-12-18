@@ -372,6 +372,7 @@ def main():
             scaler,
         )
         val_loss = evaluate(model, val_loader, criterion, device)
+        test_loss = evaluate(model, test_loader, criterion, device)
 
         # Step the scheduler
         scheduler.step(val_loss)
@@ -381,6 +382,7 @@ def main():
         logger.info(f"main: Epoch {epoch+1}:")
         logger.info(f"main: Train Loss: {train_loss:.4f}")
         logger.info(f"main: Val Loss: {val_loss:.4f}")
+        logger.info(f"main: Test Loss: {test_loss:.4f}")
         logger.info(f"main: Time: {epoch_time:.2f}s")
 
         # Save best model and check early stopping
@@ -405,15 +407,6 @@ def main():
                 break
 
         epoch += 1
-
-    # Final evaluation on test set
-    model.load_state_dict(
-        torch.load(os.path.join(config["model_dir"], "best_model.pt"))[
-            "model_state_dict"
-        ]
-    )
-    test_loss = evaluate(model, test_loader, criterion, device)
-    logger.info(f"main: Test Loss: {test_loss:.4f}")
 
 
 if __name__ == "__main__":
