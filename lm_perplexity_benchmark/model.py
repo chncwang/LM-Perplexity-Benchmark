@@ -4,6 +4,96 @@ import torch
 import torch.nn as nn
 
 
+class CustomLSTM(nn.Module):
+    def __init__(self, input_dim, hidden_dim):
+        super(CustomLSTM, self).__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+
+        # Initialize weights for input-to-hidden connections
+        self.W_ii = nn.Parameter(torch.randn(input_dim, hidden_dim))  # input gate
+        self.W_if = nn.Parameter(torch.randn(input_dim, hidden_dim))  # forget gate
+        self.W_ig = nn.Parameter(torch.randn(input_dim, hidden_dim))  # cell gate
+        self.W_io = nn.Parameter(torch.randn(input_dim, hidden_dim))  # output gate
+
+        # Initialize weights for hidden-to-hidden connections
+        self.W_hi = nn.Parameter(torch.randn(hidden_dim, hidden_dim))  # input gate
+        self.W_hf = nn.Parameter(torch.randn(hidden_dim, hidden_dim))  # forget gate
+        self.W_hg = nn.Parameter(torch.randn(hidden_dim, hidden_dim))  # cell gate
+        self.W_ho = nn.Parameter(torch.randn(hidden_dim, hidden_dim))  # output gate
+
+        # Initialize biases
+        self.b_i = nn.Parameter(torch.zeros(hidden_dim))  # input gate
+        self.b_f = nn.Parameter(torch.zeros(hidden_dim))  # forget gate
+        self.b_g = nn.Parameter(torch.zeros(hidden_dim))  # cell gate
+        self.b_o = nn.Parameter(torch.zeros(hidden_dim))  # output gate
+
+        # Initialize weights using Xavier initialization
+        self._init_weights()
+
+    def _init_weights(self):
+        """Initialize weights using Xavier initialization"""
+        for param in [
+            self.W_ii,
+            self.W_if,
+            self.W_ig,
+            self.W_io,
+            self.W_hi,
+            self.W_hf,
+            self.W_hg,
+            self.W_ho,
+        ]:
+            nn.init.xavier_uniform_(param)
+
+    def forward(self, x):
+        """
+        Forward pass of the LSTM
+        Args:
+            x: Input tensor of shape (batch_size, sequence_length, input_dim)
+        Returns:
+            outputs: Output tensor of shape (batch_size, sequence_length, hidden_dim)
+        """
+        batch_size, seq_length, _ = x.size()
+
+        # Initialize hidden state and cell state
+        h_t = torch.zeros(batch_size, self.hidden_dim).to(x.device)
+        c_t = torch.zeros(batch_size, self.hidden_dim).to(x.device)
+
+        # Container for output sequences
+        outputs = []
+
+        # Process each time step
+        for t in range(seq_length):
+            x_t = x[:, t, :]  # Current input (batch_size, input_dim)
+
+            # Input gate
+            i_t = torch.sigmoid(x_t @ self.W_ii + h_t @ self.W_hi + self.b_i)
+
+            # Forget gate
+            f_t = torch.sigmoid(x_t @ self.W_if + h_t @ self.W_hf + self.b_f)
+
+            # Cell gate (candidate)
+            g_t = torch.tanh(x_t @ self.W_ig + h_t @ self.W_hg + self.b_g)
+
+            # Output gate
+            o_t = torch.sigmoid(x_t @ self.W_io + h_t @ self.W_ho + self.b_o)
+
+            # Update cell state
+            c_t = f_t * c_t + i_t * g_t
+
+            # Update hidden state
+            h_t = o_t * torch.tanh(c_t)
+
+            outputs.append(h_t)
+
+        # Stack outputs along sequence dimension
+        outputs = torch.stack(
+            outputs, dim=1
+        )  # (batch_size, sequence_length, hidden_dim)
+
+        return outputs
+
+
 class ResidualLSTMLayer(nn.Module):
     """
     A single LSTM layer with residual connection.
