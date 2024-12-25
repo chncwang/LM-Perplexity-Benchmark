@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from lm_perplexity_benchmark.model import LSTMModel
+from lm_perplexity_benchmark.model import CustomLSTM, LSTMModel
 from lm_perplexity_benchmark.utils import (
     create_dataloaders,
     download_and_tokenize_wikitext103,
@@ -190,6 +190,12 @@ def parse_args():
     parser.add_argument(
         "--num_layers", type=int, default=3, help="Number of LSTM layers"
     )
+    parser.add_argument(
+        "--lstm_class",
+        type=str,
+        default="nn.LSTM",
+        help="LSTM class to use (nn.LSTM or CustomLSTM)",
+    )
     parser.add_argument("--dropout", type=float, default=0.3, help="Dropout rate")
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
     parser.add_argument(
@@ -261,6 +267,7 @@ def main():
         "max_length": args.max_length,
         "weight_decay": args.weight_decay,
         "disable_half_precision": args.disable_half_precision,
+        "lstm_class": args.lstm_class,
     }
     logger.info(f"main: Hyperparameters: {hyperparameters}")
 
@@ -318,6 +325,7 @@ def main():
         hyperparameters["hidden_size"],
         hyperparameters["num_layers"],
         hyperparameters["dropout"],
+        lstm_class=nn.LSTM if args.lstm_class == "nn.LSTM" else CustomLSTM,
     ).to(device)
 
     # Only compile if using CUDA and compilation is not disabled
