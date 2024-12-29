@@ -1,7 +1,10 @@
+import logging
 from typing import Optional
 
 import torch
 import torch.nn as nn
+
+logger = logging.getLogger(__name__)
 
 
 class CustomLSTM(nn.Module):
@@ -68,6 +71,9 @@ class CustomLSTM(nn.Module):
         self.register_buffer("A", A)
         self.register_buffer("B", B)
 
+        logger.debug(f"CustomLSTM.__init__: A: {A}")
+        logger.debug(f"CustomLSTM.__init__: B: {B}")
+
         # Initialize weights using Xavier initialization
         self._init_weights()
 
@@ -103,7 +109,7 @@ class CustomLSTM(nn.Module):
         # Initialize hidden state and cell state
         h_t = torch.zeros(batch_size, self.hidden_dim).to(x.device)
         c_t = torch.zeros(batch_size, self.hidden_dim).to(x.device)
-        # hippo_c_t = torch.zeros(batch_size, self.hidden_dim).to(x.device)
+        hippo_c_t = torch.zeros(batch_size, self.hidden_dim).to(x.device)
 
         # Container for output sequences and cell states
         outputs = []
@@ -112,10 +118,19 @@ class CustomLSTM(nn.Module):
         # Process each time step
         for t in range(seq_length):
             x_t = x[:, t, :]  # Current input (batch_size, input_dim)
+            logger.debug(f"CustomLSTM.forward: x_t: {x_t} shape: {x_t.shape}")
 
-            # hippo_c_t = (1.0 - self.A / (t + 1)) * hippo_c_t + 1.0 / (
-            #     t + 1.0
-            # ) * self.B * h_t
+            # Element-wise operations instead of matrix multiplication
+            scaling_factor_A = 1.0 - self.A / (t + 1.0)
+            scaling_factor_B = self.B / (t + 1.0)
+
+            # Ensure that hippo_c_t remains (batch_size, hidden_dim)
+            hippo_c_t = torch.mul(scaling_factor_A, hippo_c_t) + torch.mul(
+                scaling_factor_B, h_t
+            )
+            logger.debug(
+                f"CustomLSTM.forward: hippo_c_t: {hippo_c_t} shape: {hippo_c_t.shape}"
+            )
 
             # Input gate
             i_t = torch.sigmoid(
