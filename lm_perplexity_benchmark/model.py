@@ -8,10 +8,17 @@ logger = logging.getLogger(__name__)
 
 
 class CustomLSTM(nn.Module):
-    def __init__(self, input_dim, hidden_dim):
+    def __init__(self, input_dim: int, hidden_dim: int, hippo_dim: int):
+        """
+        Initialize the CustomLSTM model.
+        @param input_dim: Dimension of the input features
+        @param hidden_dim: Dimension of the hidden state
+        @param hippo_dim: Dimension of the hippo state
+        """
         super(CustomLSTM, self).__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
+        self.hippo_dim = hippo_dim
 
         # Initialize weights for input-to-hidden connections
         self.W_ii = nn.Parameter(torch.randn(input_dim, hidden_dim))  # input gate
@@ -26,10 +33,11 @@ class CustomLSTM(nn.Module):
         self.W_ho = nn.Parameter(torch.randn(hidden_dim, hidden_dim))  # output gate
 
         # Initialize Hippo-related weights
-        self.W_hippo_i = nn.Parameter(torch.randn(hidden_dim, hidden_dim))
-        self.W_hippo_f = nn.Parameter(torch.randn(hidden_dim, hidden_dim))
-        self.W_hippo_g = nn.Parameter(torch.randn(hidden_dim, hidden_dim))
-        self.W_hippo_o = nn.Parameter(torch.randn(hidden_dim, hidden_dim))
+        self.hidden_to_hippo = nn.Linear(hidden_dim, hippo_dim)
+        self.W_hippo_i = nn.Parameter(torch.randn(hippo_dim, hidden_dim))
+        self.W_hippo_f = nn.Parameter(torch.randn(hippo_dim, hidden_dim))
+        self.W_hippo_g = nn.Parameter(torch.randn(hippo_dim, hidden_dim))
+        self.W_hippo_o = nn.Parameter(torch.randn(hippo_dim, hidden_dim))
 
         # Initialize biases
         self.b_i = nn.Parameter(torch.zeros(hidden_dim))  # input gate
@@ -43,29 +51,29 @@ class CustomLSTM(nn.Module):
 
         if hidden_dim not in CustomLSTM._cached_matrices:
             # Initialize special weight matrices A and B more efficiently
-            n_indices = torch.arange(hidden_dim, dtype=torch.float32)
-            k_indices = torch.arange(hidden_dim, dtype=torch.float32)
+            n_indices = torch.arange(hippo_dim, dtype=torch.float32)
+            k_indices = torch.arange(hippo_dim, dtype=torch.float32)
 
             # Initialize B more efficiently
-            B = torch.sqrt(2 * n_indices + 1).unsqueeze(1).expand(-1, hidden_dim)
+            B = torch.sqrt(2 * n_indices + 1).unsqueeze(1).expand(-1, hippo_dim)
 
             # Initialize A more efficiently
-            A = torch.zeros(hidden_dim, hidden_dim)
+            A = torch.zeros(hippo_dim, hippo_dim)
             n_expanded = (2 * n_indices + 1).unsqueeze(1)
             k_expanded = (2 * k_indices + 1).unsqueeze(0)
-            mask = torch.tril(torch.ones(hidden_dim, hidden_dim))
+            mask = torch.tril(torch.ones(hippo_dim, hippo_dim))
             A = torch.where(
                 mask > 0,
                 torch.where(
-                    torch.eye(hidden_dim) > 0,
+                    torch.eye(hippo_dim) > 0,
                     n_indices + 1,
                     torch.sqrt(n_expanded * k_expanded),
                 ),
-                torch.zeros(hidden_dim, hidden_dim),
+                torch.zeros(hippo_dim, hippo_dim),
             )
-            CustomLSTM._cached_matrices[hidden_dim] = (A, B)
+            CustomLSTM._cached_matrices[hippo_dim] = (A, B)
         else:
-            A, B = CustomLSTM._cached_matrices[hidden_dim]
+            A, B = CustomLSTM._cached_matrices[hippo_dim]
 
         # Register A and B as buffers
         self.register_buffer("A", A)
@@ -98,9 +106,8 @@ class CustomLSTM(nn.Module):
     def forward(self, x):
         """
         Forward pass of the LSTM
-        Args:
-            x: Input tensor of shape (batch_size, sequence_length, input_dim)
-        Returns:
+        @param x: Input tensor of shape (batch_size, sequence_length, input_dim)
+        @return:
             outputs: Output tensor of shape (batch_size, sequence_length, hidden_dim)
             cell_states: Cell state tensor of shape (batch_size, sequence_length, hidden_dim)
         """
@@ -109,7 +116,7 @@ class CustomLSTM(nn.Module):
         # Initialize hidden state and cell state
         h_t = torch.zeros(batch_size, self.hidden_dim).to(x.device)
         c_t = torch.zeros(batch_size, self.hidden_dim).to(x.device)
-        hippo_c_t = torch.zeros(batch_size, self.hidden_dim).to(x.device)
+        hippo_c_t = torch.zeros(batch_size, self.hippo_dim).to(x.device)
 
         # Container for output sequences and cell states
         outputs = []
@@ -120,13 +127,31 @@ class CustomLSTM(nn.Module):
             x_t = x[:, t, :]  # Current input (batch_size, input_dim)
             logger.debug(f"CustomLSTM.forward: x_t: {x_t} shape: {x_t.shape}")
 
-            # Element-wise operations instead of matrix multiplication
-            scaling_factor_A = 1.0 - self.A / (t + 1.0)
-            scaling_factor_B = self.B / (t + 1.0)
+            # Modify scaling factors to have correct dimensions
+            scaling_factor_A = (1.0 - self.A / (t + 1.0)).unsqueeze(
+                0
+            )  # [1, hippo_dim, hippo_dim]
+            scaling_factor_B = (self.B / (t + 1.0)).unsqueeze(
+                0
+            )  # [1, hippo_dim, hippo_dim]
 
-            # Ensure that hippo_c_t remains (batch_size, hidden_dim)
-            hippo_c_t = torch.mul(scaling_factor_A, hippo_c_t) + torch.mul(
-                scaling_factor_B, h_t
+            # Expand scaling factors to match the batch size
+            scaling_factor_A_expanded = scaling_factor_A.expand(
+                batch_size, -1, -1
+            )  # [batch_size, hippo_dim, hippo_dim]
+            scaling_factor_B_expanded = scaling_factor_B.expand(
+                batch_size, -1, -1
+            )  # [batch_size, hippo_dim, hippo_dim]
+
+            f_t = self.hidden_to_hippo(h_t)  # [batch_size, hippo_dim]
+
+            # Update hippo cell state using batch matrix multiplication
+            hippo_c_t = torch.bmm(
+                hippo_c_t.unsqueeze(1), scaling_factor_A_expanded
+            ).squeeze(1) + torch.bmm(
+                f_t.unsqueeze(1), scaling_factor_B_expanded
+            ).squeeze(
+                1
             )
             logger.debug(
                 f"CustomLSTM.forward: hippo_c_t: {hippo_c_t} shape: {hippo_c_t.shape}"
@@ -135,7 +160,7 @@ class CustomLSTM(nn.Module):
             # Input gate
             i_t = torch.sigmoid(
                 x_t @ self.W_ii
-                # + hippo_c_t @ self.W_hippo_i
+                + hippo_c_t @ self.W_hippo_i
                 + h_t @ self.W_hi
                 + self.b_i
             )
@@ -143,7 +168,7 @@ class CustomLSTM(nn.Module):
             # Forget gate
             f_t = torch.sigmoid(
                 x_t @ self.W_if
-                # + hippo_c_t @ self.W_hippo_f
+                + hippo_c_t @ self.W_hippo_f
                 + h_t @ self.W_hf
                 + self.b_f
             )
@@ -151,7 +176,7 @@ class CustomLSTM(nn.Module):
             # Cell gate (candidate)
             g_t = torch.tanh(
                 x_t @ self.W_ig
-                # + hippo_c_t @ self.W_hippo_g
+                + hippo_c_t @ self.W_hippo_g
                 + h_t @ self.W_hg
                 + self.b_g
             )
@@ -159,7 +184,7 @@ class CustomLSTM(nn.Module):
             # Output gate
             o_t = torch.sigmoid(
                 x_t @ self.W_io
-                # + hippo_c_t @ self.W_hippo_o
+                + hippo_c_t @ self.W_hippo_o
                 + h_t @ self.W_ho
                 + self.b_o
             )
@@ -191,6 +216,7 @@ class ResidualLSTMLayer(nn.Module):
         hidden_size: int,
         dropout: float = 0.5,
         lstm_class: Optional[type] = nn.LSTM,
+        hippo_dim: int = 32,
     ) -> None:
         """
         Initialize the residual LSTM layer.
@@ -198,6 +224,7 @@ class ResidualLSTMLayer(nn.Module):
         @param hidden_size: Size of the hidden state
         @param dropout: Dropout probability
         @param lstm_class: LSTM class to use (defaults to nn.LSTM)
+        @param hippo_dim: Dimension of the hippo state
         """
         super().__init__()
 
@@ -210,7 +237,9 @@ class ResidualLSTMLayer(nn.Module):
                 batch_first=True,
             )
         elif lstm_class == CustomLSTM:
-            self.lstm = lstm_class(input_dim=input_size, hidden_dim=hidden_size)
+            self.lstm = lstm_class(
+                input_dim=input_size, hidden_dim=hidden_size, hippo_dim=hippo_dim
+            )
         else:
             raise ValueError(f"Unsupported LSTM class: {lstm_class}")
 
@@ -246,6 +275,7 @@ class LSTMModel(nn.Module):
         num_layers: int,
         dropout: float = 0.3,
         lstm_class: Optional[type] = nn.LSTM,
+        hippo_dim: int = 32,
     ) -> None:
         """
         Initialize the model.
@@ -255,6 +285,7 @@ class LSTMModel(nn.Module):
         @param num_layers: Number of stacked LSTM layers
         @param dropout: Dropout probability
         @param lstm_class: LSTM class to use (defaults to nn.LSTM)
+        @param hippo_dim: Dimension of the hippo state
         """
         super().__init__()
 
@@ -268,6 +299,7 @@ class LSTMModel(nn.Module):
             hidden_size=hidden_size,
             dropout=dropout,
             lstm_class=lstm_class,
+            hippo_dim=hippo_dim,
         )
 
         # Additional layers process hidden states
@@ -278,6 +310,7 @@ class LSTMModel(nn.Module):
                     hidden_size=hidden_size,
                     dropout=dropout,
                     lstm_class=lstm_class,
+                    hippo_dim=hippo_dim,
                 )
                 for _ in range(num_layers - 1)
             ]

@@ -238,6 +238,12 @@ def parse_args():
         action="store_true",
         help="Disable PyTorch 2.0 compilation (not recommended)",
     )
+    parser.add_argument(
+        "--hippo_dim",
+        type=int,
+        default=32,
+        help="Dimension of the hippo state",
+    )
     return parser.parse_args()
 
 
@@ -268,6 +274,7 @@ def main():
         "weight_decay": args.weight_decay,
         "disable_half_precision": args.disable_half_precision,
         "lstm_class": args.lstm_class,
+        "hippo_dim": args.hippo_dim,
     }
     logger.info(f"main: Hyperparameters: {hyperparameters}")
 
@@ -325,6 +332,7 @@ def main():
         hyperparameters["hidden_size"],
         hyperparameters["num_layers"],
         hyperparameters["dropout"],
+        hippo_dim=hyperparameters["hippo_dim"],
         lstm_class=nn.LSTM if args.lstm_class == "nn.LSTM" else CustomLSTM,
     ).to(device)
 
