@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 class CustomLSTM(nn.Module):
     def __init__(self, input_dim: int, hidden_dim: int, hippo_dim: int):
         """
-        Initialize the CustomLSTM model.
+        Initialize the CustomLSTM model using PyTorch's LSTMCell while maintaining Hippo state.
         @param input_dim: Dimension of the input features
         @param hidden_dim: Dimension of the hidden state
         @param hippo_dim: Dimension of the hippo state
@@ -20,17 +20,8 @@ class CustomLSTM(nn.Module):
         self.hidden_dim = hidden_dim
         self.hippo_dim = hippo_dim
 
-        # Initialize weights for input-to-hidden connections
-        self.W_ii = nn.Parameter(torch.randn(input_dim, hidden_dim))  # input gate
-        self.W_if = nn.Parameter(torch.randn(input_dim, hidden_dim))  # forget gate
-        self.W_ig = nn.Parameter(torch.randn(input_dim, hidden_dim))  # cell gate
-        self.W_io = nn.Parameter(torch.randn(input_dim, hidden_dim))  # output gate
-
-        # Initialize weights for hidden-to-hidden connections
-        self.W_hi = nn.Parameter(torch.randn(hidden_dim, hidden_dim))  # input gate
-        self.W_hf = nn.Parameter(torch.randn(hidden_dim, hidden_dim))  # forget gate
-        self.W_hg = nn.Parameter(torch.randn(hidden_dim, hidden_dim))  # cell gate
-        self.W_ho = nn.Parameter(torch.randn(hidden_dim, hidden_dim))  # output gate
+        # Use the standard PyTorch LSTMCell for the LSTM portion
+        self.lstm_cell = nn.LSTMCell(input_dim + hippo_dim, hidden_dim)
 
         # Initialize Hippo-related weights
         self.hidden_to_hippo = nn.Linear(hidden_dim, hippo_dim)
@@ -39,25 +30,16 @@ class CustomLSTM(nn.Module):
         self.W_hippo_g = nn.Parameter(torch.randn(hippo_dim, hidden_dim))
         self.W_hippo_o = nn.Parameter(torch.randn(hippo_dim, hidden_dim))
 
-        # Initialize biases
-        self.b_i = nn.Parameter(torch.zeros(hidden_dim))  # input gate
-        self.b_f = nn.Parameter(torch.zeros(hidden_dim))  # forget gate
-        self.b_g = nn.Parameter(torch.zeros(hidden_dim))  # cell gate
-        self.b_o = nn.Parameter(torch.zeros(hidden_dim))  # output gate
-
-        # Use cached A and B matrices if they exist for this hidden dimension
+        # Use cached A and B matrices if they exist for this hippo dimension
         if not hasattr(CustomLSTM, "_cached_matrices"):
             CustomLSTM._cached_matrices = {}
 
-        if hidden_dim not in CustomLSTM._cached_matrices:
-            # Initialize special weight matrices A and B more efficiently
+        if hippo_dim not in CustomLSTM._cached_matrices:
+            # Initialize special weight matrices A and B
             n_indices = torch.arange(hippo_dim, dtype=torch.float32)
             k_indices = torch.arange(hippo_dim, dtype=torch.float32)
 
-            # Initialize B more efficiently
             B = torch.sqrt(2 * n_indices + 1).unsqueeze(1).expand(-1, hippo_dim)
-
-            # Initialize A more efficiently
             A = torch.zeros(hippo_dim, hippo_dim)
             n_expanded = (2 * n_indices + 1).unsqueeze(1)
             k_expanded = (2 * k_indices + 1).unsqueeze(0)
@@ -75,27 +57,21 @@ class CustomLSTM(nn.Module):
         else:
             A, B = CustomLSTM._cached_matrices[hippo_dim]
 
-        # Register A and B as buffers
+        # Register A and B as buffers so they are moved correctly on .to(device) calls
         self.register_buffer("A", A)
         self.register_buffer("B", B)
 
         logger.debug(f"CustomLSTM.__init__: A: {A}")
         logger.debug(f"CustomLSTM.__init__: B: {B}")
 
-        # Initialize weights using Xavier initialization
+        # Initialize Hippo-related weights using Xavier initialization
         self._init_weights()
 
     def _init_weights(self):
-        """Initialize weights using Xavier initialization"""
+        """Initialize Hippo-related weights using Xavier initialization."""
+        # Initialize weights (2D tensors) with xavier_uniform
         for param in [
-            self.W_ii,
-            self.W_if,
-            self.W_ig,
-            self.W_io,
-            self.W_hi,
-            self.W_hf,
-            self.W_hg,
-            self.W_ho,
+            self.hidden_to_hippo.weight,
             self.W_hippo_i,
             self.W_hippo_f,
             self.W_hippo_g,
@@ -103,9 +79,12 @@ class CustomLSTM(nn.Module):
         ]:
             nn.init.xavier_uniform_(param)
 
-    def forward(self, x):
+        # Initialize bias (1D tensor) with zeros
+        nn.init.zeros_(self.hidden_to_hippo.bias)
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Forward pass of the LSTM
+        Forward pass of the LSTM with Hippo integration.
         @param x: Input tensor of shape (batch_size, sequence_length, input_dim)
         @return:
             outputs: Output tensor of shape (batch_size, sequence_length, hidden_dim)
@@ -113,98 +92,47 @@ class CustomLSTM(nn.Module):
         """
         batch_size, seq_length, _ = x.size()
 
-        # Initialize hidden state and cell state
-        h_t = torch.zeros(batch_size, self.hidden_dim).to(x.device)
-        c_t = torch.zeros(batch_size, self.hidden_dim).to(x.device)
-        hippo_c_t = torch.zeros(batch_size, self.hippo_dim).to(x.device)
+        # Initialize states
+        h_t = torch.zeros(batch_size, self.hidden_dim, device=x.device)
+        c_t = torch.zeros(batch_size, self.hidden_dim, device=x.device)
+        hippo_c_t = torch.zeros(batch_size, self.hippo_dim, device=x.device)
 
-        # Container for output sequences and cell states
         outputs = []
         cell_states = []
 
-        # Process each time step
         for t in range(seq_length):
-            x_t = x[:, t, :]  # Current input (batch_size, input_dim)
-            logger.debug(f"CustomLSTM.forward: x_t: {x_t} shape: {x_t.shape}")
+            x_t = x[:, t, :]  # (batch_size, input_dim)
 
-            # Modify scaling factors to have correct dimensions
-            scaling_factor_A = (1.0 - self.A / (t + 1.0)).unsqueeze(
-                0
-            )  # [1, hippo_dim, hippo_dim]
-            scaling_factor_B = (self.B / (t + 1.0)).unsqueeze(
-                0
-            )  # [1, hippo_dim, hippo_dim]
+            # Run standard LSTMCell with proper dimensions
+            lstm_input = torch.cat(
+                [x_t, hippo_c_t], dim=1
+            )  # Changed parentheses to square brackets
+            h_t, c_t = self.lstm_cell(lstm_input, (h_t, c_t))
 
-            # Expand scaling factors to match the batch size
-            scaling_factor_A_expanded = scaling_factor_A.expand(
-                batch_size, -1, -1
-            )  # [batch_size, hippo_dim, hippo_dim]
-            scaling_factor_B_expanded = scaling_factor_B.expand(
-                batch_size, -1, -1
-            )  # [batch_size, hippo_dim, hippo_dim]
-
-            f_t = self.hidden_to_hippo(h_t)  # [batch_size, hippo_dim]
-
-            # Update hippo cell state using batch matrix multiplication
-            hippo_c_t = torch.bmm(
-                hippo_c_t.unsqueeze(1), scaling_factor_A_expanded
-            ).squeeze(1) + torch.bmm(
-                f_t.unsqueeze(1), scaling_factor_B_expanded
-            ).squeeze(
-                1
+            # Fix scaling factor dimensions for proper broadcasting
+            scaling_factor_A = (
+                (1.0 - self.A / (t + 1.0)).unsqueeze(0).expand(batch_size, -1, -1)
             )
-            logger.debug(
-                f"CustomLSTM.forward: hippo_c_t: {hippo_c_t} shape: {hippo_c_t.shape}"
+            scaling_factor_B = (
+                (self.B / (t + 1.0)).unsqueeze(0).expand(batch_size, -1, -1)
             )
 
-            # Input gate
-            i_t = torch.sigmoid(
-                x_t @ self.W_ii
-                + hippo_c_t @ self.W_hippo_i
-                + h_t @ self.W_hi
-                + self.b_i
-            )
+            # Project hidden state to hippo space
+            f_t = self.hidden_to_hippo(h_t)  # (batch_size, hippo_dim)
 
-            # Forget gate
-            f_t = torch.sigmoid(
-                x_t @ self.W_if
-                + hippo_c_t @ self.W_hippo_f
-                + h_t @ self.W_hf
-                + self.b_f
-            )
-
-            # Cell gate (candidate)
-            g_t = torch.tanh(
-                x_t @ self.W_ig
-                + hippo_c_t @ self.W_hippo_g
-                + h_t @ self.W_hg
-                + self.b_g
-            )
-
-            # Output gate
-            o_t = torch.sigmoid(
-                x_t @ self.W_io
-                + hippo_c_t @ self.W_hippo_o
-                + h_t @ self.W_ho
-                + self.b_o
-            )
-
-            # Update cell state
-            c_t = f_t * c_t + i_t * g_t
-
-            # Update hidden state
-            h_t = o_t * torch.tanh(c_t)
+            # Update Hippo cell state with proper dimensions
+            hippo_c_t = (scaling_factor_A.squeeze(2) @ hippo_c_t.unsqueeze(2)).squeeze(
+                2
+            ) + (scaling_factor_B.squeeze(2) @ f_t.unsqueeze(2)).squeeze(2)
 
             outputs.append(h_t)
             cell_states.append(c_t)
 
-        # Stack outputs and cell states along sequence dimension
-        outputs = torch.stack(
-            outputs, dim=1
-        )  # (batch_size, sequence_length, hidden_dim)
+        # Stack outputs along the sequence dimension
+        outputs = torch.stack(outputs, dim=1)  # (batch_size, seq_length, hidden_dim)
         cell_states = torch.stack(
             cell_states, dim=1
-        )  # (batch_size, sequence_length, hidden_dim)
+        )  # (batch_size, seq_length, hidden_dim)
 
         return outputs, cell_states
 
@@ -299,7 +227,6 @@ class LSTMModel(nn.Module):
             hidden_size=hidden_size,
             dropout=dropout,
             lstm_class=lstm_class,
-            hippo_dim=hippo_dim,
         )
 
         # Additional layers process hidden states
@@ -310,7 +237,6 @@ class LSTMModel(nn.Module):
                     hidden_size=hidden_size,
                     dropout=dropout,
                     lstm_class=lstm_class,
-                    hippo_dim=hippo_dim,
                 )
                 for _ in range(num_layers - 1)
             ]
