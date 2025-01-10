@@ -119,7 +119,7 @@ class CustomLSTM(nn.Module):
             logger.debug(f"CustomLSTM.forward: c_t: {c_t} shape: {c_t.shape}")
 
             # Add numerical stability to scaling factors
-            max_scale = 1000.0  # Tune this value based on your needs
+            max_scale = 1.0  # Tune this value based on your needs
 
             scaling_factor_A = 1.0 - self.A / (t + 1.0)
             scaling_factor_A = torch.clamp(
