@@ -39,7 +39,12 @@ class CustomLSTM(nn.Module):
             n_indices = torch.arange(hippo_dim, dtype=torch.float32)
             k_indices = torch.arange(hippo_dim, dtype=torch.float32)
 
-            B = torch.sqrt(2 * n_indices + 1).unsqueeze(1).expand(-1, hippo_dim)
+            # Create B tensor with proper memory allocation
+            B = (
+                torch.sqrt(2 * n_indices + 1).unsqueeze(1).expand(-1, hippo_dim).clone()
+                * 0.5
+            )
+
             A = torch.zeros(hippo_dim, hippo_dim)
             n_expanded = (2 * n_indices + 1).unsqueeze(1)
             k_expanded = (2 * k_indices + 1).unsqueeze(0)
@@ -53,6 +58,7 @@ class CustomLSTM(nn.Module):
                 ),
                 torch.zeros(hippo_dim, hippo_dim),
             )
+            A *= 0.5
             CustomLSTM._cached_matrices[hippo_dim] = (A, B)
         else:
             A, B = CustomLSTM._cached_matrices[hippo_dim]
@@ -112,27 +118,41 @@ class CustomLSTM(nn.Module):
             logger.debug(f"CustomLSTM.forward: h_t: {h_t} shape: {h_t.shape}")
             logger.debug(f"CustomLSTM.forward: c_t: {c_t} shape: {c_t.shape}")
 
-            # Fix scaling factor dimensions for proper broadcasting
-            scaling_factor_A = (
-                (1.0 - self.A / (t + 1.0)).unsqueeze(0).expand(batch_size, -1, -1)
+            # Add numerical stability to scaling factors
+            max_scale = 1000.0  # Tune this value based on your needs
+
+            scaling_factor_A = 1.0 - self.A / (t + 1.0)
+            scaling_factor_A = torch.clamp(
+                scaling_factor_A, min=-max_scale, max=max_scale
             )
+            scaling_factor_A = scaling_factor_A.unsqueeze(0).expand(batch_size, -1, -1)
+
+            scaling_factor_B = self.B / (t + 1.0)
+            scaling_factor_B = torch.clamp(
+                scaling_factor_B, min=-max_scale, max=max_scale
+            )
+            scaling_factor_B = scaling_factor_B.unsqueeze(0).expand(batch_size, -1, -1)
+
             logger.debug(
                 f"CustomLSTM.forward: scaling_factor_A: {scaling_factor_A} shape: {scaling_factor_A.shape}"
-            )
-            scaling_factor_B = (
-                (self.B / (t + 1.0)).unsqueeze(0).expand(batch_size, -1, -1)
             )
             logger.debug(
                 f"CustomLSTM.forward: scaling_factor_B: {scaling_factor_B} shape: {scaling_factor_B.shape}"
             )
-            # Project hidden state to hippo space
+
+            # Project hidden state with stability
             f_t = self.hidden_to_hippo(h_t)  # (batch_size, hippo_dim)
+            f_t = torch.clamp(f_t, min=-max_scale, max=max_scale)
             logger.debug(f"CustomLSTM.forward: f_t: {f_t} shape: {f_t.shape}")
 
-            # Update Hippo cell state with proper dimensions
+            # Update hippo cell state with stability checks
             hippo_c_t = (scaling_factor_A.squeeze(2) @ hippo_c_t.unsqueeze(2)).squeeze(
                 2
-            ) + (scaling_factor_B.squeeze(2) @ f_t.unsqueeze(2)).squeeze(2)
+            )
+            hippo_c_t = hippo_c_t + (
+                scaling_factor_B.squeeze(2) @ f_t.unsqueeze(2)
+            ).squeeze(2)
+            hippo_c_t = torch.clamp(hippo_c_t, min=-max_scale, max=max_scale)
             logger.debug(
                 f"CustomLSTM.forward: hippo_c_t: {hippo_c_t} shape: {hippo_c_t.shape}"
             )
