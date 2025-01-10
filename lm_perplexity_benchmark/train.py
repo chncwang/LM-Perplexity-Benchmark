@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 import os
+import sys
 import time
 
 import torch
@@ -20,6 +21,11 @@ from lm_perplexity_benchmark.utils import (
     create_dataloaders,
     download_and_tokenize_wikitext103,
     setup_logger,
+)
+
+# Configure PyTorch tensor logging globally
+torch.set_printoptions(
+    precision=3, threshold=100, edgeitems=1, linewidth=80, profile=None, sci_mode=False
 )
 
 

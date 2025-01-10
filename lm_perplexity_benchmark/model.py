@@ -102,28 +102,40 @@ class CustomLSTM(nn.Module):
 
         for t in range(seq_length):
             x_t = x[:, t, :]  # (batch_size, input_dim)
+            logger.debug(f"CustomLSTM.forward: x_t: {x_t} shape: {x_t.shape}")
 
             # Run standard LSTMCell with proper dimensions
             lstm_input = torch.cat(
                 [x_t, hippo_c_t], dim=1
             )  # Changed parentheses to square brackets
             h_t, c_t = self.lstm_cell(lstm_input, (h_t, c_t))
+            logger.debug(f"CustomLSTM.forward: h_t: {h_t} shape: {h_t.shape}")
+            logger.debug(f"CustomLSTM.forward: c_t: {c_t} shape: {c_t.shape}")
 
             # Fix scaling factor dimensions for proper broadcasting
             scaling_factor_A = (
                 (1.0 - self.A / (t + 1.0)).unsqueeze(0).expand(batch_size, -1, -1)
             )
+            logger.debug(
+                f"CustomLSTM.forward: scaling_factor_A: {scaling_factor_A} shape: {scaling_factor_A.shape}"
+            )
             scaling_factor_B = (
                 (self.B / (t + 1.0)).unsqueeze(0).expand(batch_size, -1, -1)
             )
-
+            logger.debug(
+                f"CustomLSTM.forward: scaling_factor_B: {scaling_factor_B} shape: {scaling_factor_B.shape}"
+            )
             # Project hidden state to hippo space
             f_t = self.hidden_to_hippo(h_t)  # (batch_size, hippo_dim)
+            logger.debug(f"CustomLSTM.forward: f_t: {f_t} shape: {f_t.shape}")
 
             # Update Hippo cell state with proper dimensions
             hippo_c_t = (scaling_factor_A.squeeze(2) @ hippo_c_t.unsqueeze(2)).squeeze(
                 2
             ) + (scaling_factor_B.squeeze(2) @ f_t.unsqueeze(2)).squeeze(2)
+            logger.debug(
+                f"CustomLSTM.forward: hippo_c_t: {hippo_c_t} shape: {hippo_c_t.shape}"
+            )
 
             outputs.append(h_t)
             cell_states.append(c_t)
@@ -185,8 +197,17 @@ class ResidualLSTMLayer(nn.Module):
         @return: Output tensor of shape (batch_size, sequence_length, hidden_size)
         """
         residual = x if self.projection is None else self.projection(x)
+        logger.debug(
+            f"ResidualLSTMLayer.forward: residual: {residual} shape: {residual.shape}"
+        )
         output, _ = self.lstm(x)
+        logger.debug(
+            f"ResidualLSTMLayer.forward: output: {output} shape: {output.shape}"
+        )
         output = self.dropout(output)
+        logger.debug(
+            f"ResidualLSTMLayer.forward: output after dropout: {output} shape: {output.shape}"
+        )
         return output + residual
 
 
@@ -273,20 +294,26 @@ class LSTMModel(nn.Module):
         # (batch_size, sequence_length) -> (batch_size, sequence_length, embedding_size)
         x = self.embedding(x)
         x = self.embedding_dropout(x)
+        logger.debug(
+            f"LSTMModel.forward: x after embedding dropout: {x} shape: {x.shape}"
+        )
 
         # Process through first LSTM layer
         x = self.first_layer(x)
-
+        logger.debug(f"LSTMModel.forward: x after first layer: {x} shape: {x.shape}")
         # Process through additional layers
         for layer in self.layers:
             x = layer(x)
+            logger.debug(f"LSTMModel.forward: x after layer: {x} shape: {x.shape}")
 
         # Project to hidden size if necessary
         if self.projection is not None:
             x = self.projection(x)
+        logger.debug(f"LSTMModel.forward: x after projection: {x} shape: {x.shape}")
 
         # Project to vocabulary size
         # (batch_size, sequence_length, hidden_size) -> (batch_size, sequence_length, vocab_size)
         logits = self.output(x)
+        logger.debug(f"LSTMModel.forward: logits: {logits} shape: {logits.shape}")
 
         return logits
