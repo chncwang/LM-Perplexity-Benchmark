@@ -15,9 +15,7 @@ class HippoStateUpdate(nn.Module):
     def forward(self, hippo_c_t, f_t, scaling_factor_A, scaling_factor_B):
         # Update hippo cell state with stability checks
         hippo_c_t = (scaling_factor_A.squeeze(2) @ hippo_c_t.unsqueeze(2)).squeeze(2)
-        hippo_c_t = hippo_c_t + (
-            scaling_factor_B.squeeze(2) @ f_t.unsqueeze(2)
-        ).squeeze(2)
+        hippo_c_t = hippo_c_t + (scaling_factor_B.squeeze(2) * f_t)
         return torch.clamp(hippo_c_t, min=-self.max_scale, max=self.max_scale)
 
 
@@ -34,10 +32,11 @@ class ScalingFactorCompute(nn.Module):
         )
         scaling_factor_A = scaling_factor_A.unsqueeze(0).expand(batch_size, -1, -1)
 
-        scaling_factor_B = B / (t + 1.0)
+        scaling_factor_B = B / (t + 1.0)  # B is already a column matrix (hippo_dim, 1)
         scaling_factor_B = torch.clamp(
             scaling_factor_B, min=-self.max_scale, max=self.max_scale
         )
+        # Expand to (batch_size, hippo_dim, 1) to match the expected dimensions
         scaling_factor_B = scaling_factor_B.unsqueeze(0).expand(batch_size, -1, -1)
 
         return scaling_factor_A, scaling_factor_B
@@ -75,11 +74,8 @@ class CustomLSTM(nn.Module):
             n_indices = torch.arange(hippo_dim, dtype=torch.float32)
             k_indices = torch.arange(hippo_dim, dtype=torch.float32)
 
-            # Create B tensor with proper memory allocation
-            B = (
-                torch.sqrt(2 * n_indices + 1).unsqueeze(1).expand(-1, hippo_dim).clone()
-                * 0.5
-            )
+            # Create B tensor as a column matrix
+            B = torch.sqrt(2 * n_indices + 1).unsqueeze(1) * 0.5
 
             A = torch.zeros(hippo_dim, hippo_dim)
             n_expanded = (2 * n_indices + 1).unsqueeze(1)
