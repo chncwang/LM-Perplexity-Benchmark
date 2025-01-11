@@ -109,8 +109,16 @@ class CustomLSTM(nn.Module):
         # Initialize Hippo-related weights using Xavier initialization
         self._init_weights()
 
-        self.hippo_update = torch.compile(HippoStateUpdate())
-        self.scaling_computer = torch.compile(ScalingFactorCompute())
+        # Only compile if CUDA is available
+        if torch.cuda.is_available():
+            self.hippo_update = torch.compile(HippoStateUpdate())
+            self.scaling_computer = torch.compile(ScalingFactorCompute())
+        else:
+            self.hippo_update = HippoStateUpdate()
+            self.scaling_computer = ScalingFactorCompute()
+
+        # Store max_scale as instance variable
+        self.max_scale = 1.0
 
     def _init_weights(self):
         """Initialize Hippo-related weights using Xavier initialization."""
@@ -171,7 +179,7 @@ class CustomLSTM(nn.Module):
 
             # Project hidden state with stability
             f_t = self.hidden_to_hippo(h_t)  # (batch_size, hippo_dim)
-            f_t = torch.clamp(f_t, min=-max_scale, max=max_scale)
+            f_t = torch.clamp(f_t, min=-self.max_scale, max=self.max_scale)
             logger.debug(f"CustomLSTM.forward: f_t: {f_t} shape: {f_t.shape}")
 
             # Replace the hippo state update with the compiled version
