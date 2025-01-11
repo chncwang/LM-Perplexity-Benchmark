@@ -7,6 +7,42 @@ import torch.nn as nn
 logger = logging.getLogger(__name__)
 
 
+class HippoStateUpdate(nn.Module):
+    def __init__(self, max_scale: float = 1.0):
+        super().__init__()
+        self.max_scale = max_scale
+
+    def forward(self, hippo_c_t, f_t, scaling_factor_A, scaling_factor_B):
+        # Update hippo cell state with stability checks
+        hippo_c_t = (scaling_factor_A.squeeze(2) @ hippo_c_t.unsqueeze(2)).squeeze(2)
+        hippo_c_t = hippo_c_t + (
+            scaling_factor_B.squeeze(2) @ f_t.unsqueeze(2)
+        ).squeeze(2)
+        return torch.clamp(hippo_c_t, min=-self.max_scale, max=self.max_scale)
+
+
+class ScalingFactorCompute(nn.Module):
+    def __init__(self, max_scale: float = 1.0):
+        super().__init__()
+        self.max_scale = max_scale
+
+    def forward(self, A, B, t, batch_size):
+        # Compute both scaling factors in one forward pass
+        scaling_factor_A = 1.0 - A / (t + 1.0)
+        scaling_factor_A = torch.clamp(
+            scaling_factor_A, min=-self.max_scale, max=self.max_scale
+        )
+        scaling_factor_A = scaling_factor_A.unsqueeze(0).expand(batch_size, -1, -1)
+
+        scaling_factor_B = B / (t + 1.0)
+        scaling_factor_B = torch.clamp(
+            scaling_factor_B, min=-self.max_scale, max=self.max_scale
+        )
+        scaling_factor_B = scaling_factor_B.unsqueeze(0).expand(batch_size, -1, -1)
+
+        return scaling_factor_A, scaling_factor_B
+
+
 class CustomLSTM(nn.Module):
     def __init__(self, input_dim: int, hidden_dim: int, hippo_dim: int):
         """
@@ -73,6 +109,9 @@ class CustomLSTM(nn.Module):
         # Initialize Hippo-related weights using Xavier initialization
         self._init_weights()
 
+        self.hippo_update = torch.compile(HippoStateUpdate())
+        self.scaling_computer = torch.compile(ScalingFactorCompute())
+
     def _init_weights(self):
         """Initialize Hippo-related weights using Xavier initialization."""
         # Initialize weights (2D tensors) with xavier_uniform
@@ -118,20 +157,10 @@ class CustomLSTM(nn.Module):
             logger.debug(f"CustomLSTM.forward: h_t: {h_t} shape: {h_t.shape}")
             logger.debug(f"CustomLSTM.forward: c_t: {c_t} shape: {c_t.shape}")
 
-            # Add numerical stability to scaling factors
-            max_scale = 1.0  # Tune this value based on your needs
-
-            scaling_factor_A = 1.0 - self.A / (t + 1.0)
-            scaling_factor_A = torch.clamp(
-                scaling_factor_A, min=-max_scale, max=max_scale
+            # Replace scaling factor computation with compiled version
+            scaling_factor_A, scaling_factor_B = self.scaling_computer(
+                self.A, self.B, t, batch_size
             )
-            scaling_factor_A = scaling_factor_A.unsqueeze(0).expand(batch_size, -1, -1)
-
-            scaling_factor_B = self.B / (t + 1.0)
-            scaling_factor_B = torch.clamp(
-                scaling_factor_B, min=-max_scale, max=max_scale
-            )
-            scaling_factor_B = scaling_factor_B.unsqueeze(0).expand(batch_size, -1, -1)
 
             logger.debug(
                 f"CustomLSTM.forward: scaling_factor_A: {scaling_factor_A} shape: {scaling_factor_A.shape}"
@@ -145,14 +174,10 @@ class CustomLSTM(nn.Module):
             f_t = torch.clamp(f_t, min=-max_scale, max=max_scale)
             logger.debug(f"CustomLSTM.forward: f_t: {f_t} shape: {f_t.shape}")
 
-            # Update hippo cell state with stability checks
-            hippo_c_t = (scaling_factor_A.squeeze(2) @ hippo_c_t.unsqueeze(2)).squeeze(
-                2
+            # Replace the hippo state update with the compiled version
+            hippo_c_t = self.hippo_update(
+                hippo_c_t, f_t, scaling_factor_A, scaling_factor_B
             )
-            hippo_c_t = hippo_c_t + (
-                scaling_factor_B.squeeze(2) @ f_t.unsqueeze(2)
-            ).squeeze(2)
-            hippo_c_t = torch.clamp(hippo_c_t, min=-max_scale, max=max_scale)
             logger.debug(
                 f"CustomLSTM.forward: hippo_c_t: {hippo_c_t} shape: {hippo_c_t.shape}"
             )
