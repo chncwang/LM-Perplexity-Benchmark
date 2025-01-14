@@ -39,7 +39,11 @@ def train_epoch(
     logger: logging.Logger,
     tokenizer: AutoTokenizer,
     scaler: GradScaler,
-) -> float:
+    epoch: int,
+    checkpoint_dir: str,
+    checkpoint_interval: int,
+    start_batch_idx: int = 0,
+) -> tuple[float, int]:
     """
     Train one epoch of the model.
     """
@@ -53,9 +57,16 @@ def train_epoch(
     total_tokens = 0
     tokens_per_second = 0
 
+    last_checkpoint_time = time.time()
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    checkpoint_path = os.path.join(checkpoint_dir, "latest_checkpoint.pt")
+
     for batch_idx, (input_ids, target_ids, mask) in enumerate(
-        tqdm(train_loader, desc="Training")
+        tqdm(train_loader, desc="Training", initial=start_batch_idx)
     ):
+        if batch_idx < start_batch_idx:
+            continue
+
         # Count tokens in this batch (sum of True values in mask)
         batch_tokens = mask.sum().item()
         total_tokens += batch_tokens
@@ -135,7 +146,30 @@ def train_epoch(
             )
             logger.info(f"train_epoch: Predicted Tokens: {decoded_predictions}")
 
-    return total_loss / len(train_loader)
+        # Add checkpoint saving
+        current_time = time.time()
+        if current_time - last_checkpoint_time >= checkpoint_interval:
+            train_loader_state = {
+                "batch_idx": batch_idx,
+                "dataset_state": getattr(
+                    train_loader.dataset, "__getstate__", lambda: {}
+                )(),
+            }
+
+            save_checkpoint(
+                model,
+                optimizer,
+                scaler,
+                epoch,
+                batch_idx,
+                train_loader_state,
+                total_loss / (batch_idx + 1),
+                checkpoint_path,
+                logger,
+            )
+            last_checkpoint_time = current_time
+
+    return total_loss / len(train_loader), batch_idx
 
 
 def evaluate(
@@ -250,7 +284,50 @@ def parse_args():
         default=32,
         help="Dimension of the hippo state",
     )
+    parser.add_argument(
+        "--checkpoint_dir",
+        type=str,
+        default="checkpoints",
+        help="Directory to save checkpoints",
+    )
+    parser.add_argument(
+        "--checkpoint_interval",
+        type=int,
+        default=3600,  # 1 hour in seconds
+        help="Time interval between checkpoints in seconds",
+    )
+    parser.add_argument(
+        "--resume_from_checkpoint",
+        type=str,
+        default=None,
+        help="Path to checkpoint file to resume training from",
+    )
     return parser.parse_args()
+
+
+def save_checkpoint(
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    scaler: GradScaler,
+    epoch: int,
+    batch_idx: int,
+    train_loader_state: dict,
+    loss: float,
+    checkpoint_path: str,
+    logger: logging.Logger,
+):
+    """Save model checkpoint with training state."""
+    checkpoint = {
+        "epoch": epoch,
+        "batch_idx": batch_idx,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "scaler_state_dict": scaler.state_dict(),
+        "train_loader_state": train_loader_state,
+        "loss": loss,
+    }
+    torch.save(checkpoint, checkpoint_path)
+    logger.info(f"Saved checkpoint at epoch {epoch}, batch {batch_idx}")
 
 
 def main():
@@ -375,6 +452,28 @@ def main():
     patience_counter = 0
     epoch = 0
 
+    start_epoch = 0
+    start_batch_idx = 0
+
+    # Load checkpoint if resuming
+    if args.resume_from_checkpoint and os.path.exists(args.resume_from_checkpoint):
+        logger.info(f"Loading checkpoint from {args.resume_from_checkpoint}")
+        checkpoint = torch.load(args.resume_from_checkpoint)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        scaler.load_state_dict(checkpoint["scaler_state_dict"])
+        start_epoch = checkpoint["epoch"]
+        start_batch_idx = checkpoint["batch_idx"] + 1
+
+        if "train_loader_state" in checkpoint:
+            train_dataset_state = checkpoint["train_loader_state"].get(
+                "dataset_state", {}
+            )
+            if hasattr(train_dataset, "__setstate__"):
+                train_dataset.__setstate__(train_dataset_state)
+
+    # Update training loop
+    epoch = start_epoch
     while True:
         if args.num_epochs is not None and epoch >= args.num_epochs:
             break
@@ -382,7 +481,7 @@ def main():
         logger.info(f"main: Epoch {epoch+1}")
         start_time = time.time()
 
-        train_loss = train_epoch(
+        train_loss, last_batch_idx = train_epoch(
             model,
             train_loader,
             criterion,
@@ -392,7 +491,14 @@ def main():
             logger,
             tokenizer,
             scaler,
+            epoch,
+            args.checkpoint_dir,
+            args.checkpoint_interval,
+            start_batch_idx if epoch == start_epoch else 0,
         )
+
+        start_batch_idx = 0  # Reset after first resumed epoch
+
         val_loss = evaluate(model, val_loader, criterion, device)
         test_loss = evaluate(model, test_loader, criterion, device)
 
