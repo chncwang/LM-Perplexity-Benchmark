@@ -324,6 +324,10 @@ def save_checkpoint(
         "optimizer_state_dict": optimizer.state_dict(),
         "scaler_state_dict": scaler.state_dict(),
         "train_loader_state": train_loader_state,
+        "random_state": torch.get_rng_state(),
+        "cuda_random_state": (
+            torch.cuda.get_rng_state() if torch.cuda.is_available() else None
+        ),
         "loss": loss,
     }
     torch.save(checkpoint, checkpoint_path)
@@ -471,6 +475,11 @@ def main():
             )
             if hasattr(train_dataset, "__setstate__"):
                 train_dataset.__setstate__(train_dataset_state)
+
+        # Restore random states
+        torch.set_rng_state(checkpoint["random_state"])
+        if checkpoint["cuda_random_state"] is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state(checkpoint["cuda_random_state"])
 
     # Update training loop
     epoch = start_epoch

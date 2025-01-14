@@ -182,11 +182,22 @@ def create_dataloaders(
         use_cache=True,
     )
 
+    # Create a generator with fixed seed for reproducibility
+    g = torch.Generator()
+    g.manual_seed(42)  # Fixed seed for reproducible batch ordering
+
     train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True, num_workers=4
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=4,
+        generator=g,  # Add the generator for reproducible shuffling
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=batch_size, shuffle=False, num_workers=4
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,  # No need for generator on validation/test as shuffle=False
+        num_workers=4,
     )
     test_loader = DataLoader(
         test_dataset, batch_size=batch_size, shuffle=False, num_workers=4
