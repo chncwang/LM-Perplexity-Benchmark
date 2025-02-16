@@ -8,14 +8,17 @@ logger = logging.getLogger(__name__)
 
 
 class HippoStateUpdate(nn.Module):
-    def __init__(self, max_scale: float = 1.0):
+    def __init__(self, max_scale: float = 1.0, hippo_dim: int = None):
         super().__init__()
         self.max_scale = max_scale
+        self.hippo_dim = hippo_dim
 
     def forward(self, hippo_c_t, f_t, scaling_factor_A, scaling_factor_B):
         # Update hippo cell state with stability checks
         hippo_c_t = (scaling_factor_A.squeeze(2) @ hippo_c_t.unsqueeze(2)).squeeze(2)
-        hippo_c_t = hippo_c_t + (scaling_factor_B.squeeze(2) * f_t)
+        hippo_c_t = hippo_c_t + (
+            scaling_factor_B.squeeze(2) * f_t.expand(-1, self.hippo_dim)
+        )
         return torch.clamp(hippo_c_t, min=-self.max_scale, max=self.max_scale)
 
 
@@ -59,7 +62,7 @@ class CustomLSTM(nn.Module):
         self.lstm_cell = nn.LSTMCell(input_dim + hippo_dim, hidden_dim)
 
         # Initialize Hippo-related weights
-        self.hidden_to_hippo = nn.Linear(hidden_dim, hippo_dim)
+        self.hidden_to_hippo = nn.Linear(hidden_dim, 1)
         self.W_hippo_i = nn.Parameter(torch.randn(hippo_dim, hidden_dim))
         self.W_hippo_f = nn.Parameter(torch.randn(hippo_dim, hidden_dim))
         self.W_hippo_g = nn.Parameter(torch.randn(hippo_dim, hidden_dim))
@@ -107,10 +110,10 @@ class CustomLSTM(nn.Module):
 
         # Only compile if CUDA is available
         if torch.cuda.is_available():
-            self.hippo_update = torch.compile(HippoStateUpdate())
+            self.hippo_update = torch.compile(HippoStateUpdate(hippo_dim=hippo_dim))
             self.scaling_computer = torch.compile(ScalingFactorCompute())
         else:
-            self.hippo_update = HippoStateUpdate()
+            self.hippo_update = HippoStateUpdate(hippo_dim=hippo_dim)
             self.scaling_computer = ScalingFactorCompute()
 
         # Store max_scale as instance variable
@@ -174,7 +177,7 @@ class CustomLSTM(nn.Module):
             )
 
             # Project hidden state with stability
-            f_t = self.hidden_to_hippo(h_t)  # (batch_size, hippo_dim)
+            f_t = self.hidden_to_hippo(h_t)  # (batch_size, 1)
             f_t = torch.clamp(f_t, min=-self.max_scale, max=self.max_scale)
             logger.debug(f"CustomLSTM.forward: f_t: {f_t} shape: {f_t.shape}")
 
