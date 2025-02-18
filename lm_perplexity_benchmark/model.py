@@ -248,7 +248,7 @@ class ResidualLSTMLayer(nn.Module):
         @param x: Input tensor of shape (batch_size, sequence_length, input_size)
         @return: Output tensor of shape (batch_size, sequence_length, hidden_size)
         """
-        residual = x if self.projection is None else self.projection(x)
+        residual = x.clone() if self.projection is None else self.projection(x)
         logger.debug(
             f"ResidualLSTMLayer.forward: residual: {residual} shape: {residual.shape}"
         )
